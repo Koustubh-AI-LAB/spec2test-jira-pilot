@@ -7,6 +7,10 @@ import { decide } from '../gates/gates.ts';
 import type { Channel, Decision, Gate } from '../gates/gates.ts';
 import { capabilitiesFor, isEnvironmentClass } from '../env/capabilities.ts';
 import { EnvironmentNotAllowedError, ServiceError } from '../errors.ts';
+import { jiraClient } from '../jira/client.ts';
+import { reconcile } from '../jira/reconcile.ts';
+import { postCriteria, postDrift } from '../jira/write.ts';
+import type { CriterionView } from '../jira/write.ts';
 
 /**
  * Bumped whenever the plugin-facing contract changes. The skill checks this at
@@ -214,6 +218,68 @@ export function buildServer(): FastifyInstance {
       });
     });
   }
+
+  // --- Jira -------------------------------------------------------------
+  // The service owns all Jira I/O. Nothing is reachable *from* Jira: every
+  // route here pulls the ticket's current state and reconciles against it.
+
+  app.get('/jira/preflight', async () => {
+    const client = jiraClient();
+    const me = await client.preflight();
+    return { ok: true, ...me };
+  });
+
+  /**
+   * Read a ticket and report what the pipeline would do. `dry_run=1` touches
+   * neither Postgres nor Jira, which makes it safe to call from anywhere while
+   * still being the same code path that does the real work.
+   */
+  app.post('/jira/:issueKey/reconcile', async (req) => {
+    const { issueKey } = req.params as { issueKey: string };
+    const { dry_run } = (req.body ?? {}) as { dry_run?: boolean };
+    const client = jiraClient();
+    const result = await reconcile(client, issueKey, { dryRun: dry_run ?? false });
+
+    // Drift found by the reconcile is reported back onto the ticket, so the PO
+    // sees it in Jira rather than only in a developer's terminal.
+    if (!result.dryRun && result.action === 'drift_detected' && result.drift) {
+      await postDrift(client, issueKey, result.drift);
+    }
+    const { ticket, ...rest } = result;
+    return { ...rest, ticket: ticket && { summary: ticket.summary, status: ticket.status,
+      verificationStatus: ticket.verificationStatus, labels: ticket.labels } };
+  });
+
+  /** Push drafted criteria onto the ticket. No-op when nothing changed. */
+  app.post('/jira/:issueKey/criteria', async (req) => {
+    const { issueKey } = req.params as { issueKey: string };
+    const body = req.body as { requirement_id: string; force?: boolean };
+
+    const { rows } = await pool.query(
+      `SELECT c.id, c.ordinal, c.body, c.content_hash, c.state_affecting, r.source_text_hash
+         FROM criterion c JOIN requirement r ON r.id = c.requirement_id
+        WHERE c.requirement_id = $1 ORDER BY c.ordinal`,
+      [body.requirement_id],
+    );
+    if (rows.length === 0) {
+      throw new ServiceError('no_criteria', `requirement ${body.requirement_id} has no criteria`);
+    }
+
+    const criteria: CriterionView[] = rows.map((r) => ({
+      id: r.id,
+      ordinal: r.ordinal,
+      body: r.body,
+      contentHash: r.content_hash,
+      stateAffecting: r.state_affecting,
+    }));
+
+    const outcome = await postCriteria(
+      jiraClient(),
+      { issueKey, criteria, requirementHash: rows[0].source_text_hash },
+      { force: body.force },
+    );
+    return outcome;
+  });
 
   app.get('/audit', async (req) => {
     const { limit } = req.query as { limit?: string };
