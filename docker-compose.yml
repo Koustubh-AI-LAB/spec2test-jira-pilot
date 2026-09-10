@@ -1,0 +1,24 @@
+# Local Postgres for the State Service.
+#
+# Port 5435, deliberately: TestForge's compose already uses 5434, and 5433 was
+# found squatted on this machine by an unrelated container - a collision there
+# shows up as a silent connection to the wrong database, not a clear error.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: spec2test
+      POSTGRES_PASSWORD: spec2test
+      POSTGRES_DB: spec2test
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spec2test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

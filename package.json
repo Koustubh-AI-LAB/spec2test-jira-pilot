@@ -1,0 +1,19 @@
+{
+  "name": "spec2test-jira-pilot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Jira to Claude Code QA pipeline: requirement in, proven test out, status back on the ticket.",
+  "workspaces": [
+    "service"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0"
+}
