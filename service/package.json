@@ -1,0 +1,22 @@
+{
+  "name": "@spec2test/service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/api/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --experimental-strip-types src/api/server.ts",
+    "migrate": "node --experimental-strip-types src/db/migrate.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3"
+  }
+}
