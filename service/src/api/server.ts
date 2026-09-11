@@ -9,6 +9,7 @@ import { capabilitiesFor, isEnvironmentClass } from '../env/capabilities.ts';
 import { EnvironmentNotAllowedError, ServiceError } from '../errors.ts';
 import { jiraClient } from '../jira/client.ts';
 import { reconcile } from '../jira/reconcile.ts';
+import { loadFieldMap, validateFieldMap } from '../jira/read.ts';
 import { postCriteria, postDrift, postRefusal } from '../jira/write.ts';
 import type { CriterionView } from '../jira/write.ts';
 
@@ -143,6 +144,11 @@ export function buildServer(): FastifyInstance {
     const { id } = req.params as { id: string };
     const b = req.body as { criteria: { body: string; state_affecting?: boolean }[] };
     const created = [];
+    // 1-based, to match every other ordinal in the codebase (reconcile.ts,
+    // the redraft route below, every test fixture). This route used to start
+    // at 0, which is harmless on its own but meant a criterion's ordinal here
+    // and its ordinal after a redraft could refer to different criteria -
+    // exactly the kind of drift the redraft route otherwise exists to catch.
     for (const [i, c] of b.criteria.entries()) {
       const { rows } = await pool.query(
         `INSERT INTO criterion (requirement_id, ordinal, body, content_hash, state_affecting)
@@ -150,11 +156,111 @@ export function buildServer(): FastifyInstance {
          ON CONFLICT (requirement_id, ordinal) DO UPDATE
            SET body = EXCLUDED.body, content_hash = EXCLUDED.content_hash, updated_at = now()
          RETURNING *`,
-        [id, i, c.body, contentHash(c.body), c.state_affecting ?? false],
+        [id, i + 1, c.body, contentHash(c.body), c.state_affecting ?? false],
       );
       created.push(rows[0]);
     }
     return { criteria: created };
+  });
+
+  /**
+   * Redraft a requirement whose text moved out from under an approval - the
+   * path drift and Gate 1 rejection both land on. Before this route existed,
+   * a requirement the reconcile marked `stale` had no way back: the local
+   * hash never changed, so every future reconcile reported drift again,
+   * forever. This is a Postgres-only mutation; the caller still has to POST
+   * the result to /jira/:issueKey/criteria to push it back onto the ticket,
+   * the same as an original draft would.
+   */
+  app.post('/requirements/:id/redraft', async (req) => {
+    const { id } = req.params as { id: string };
+    const b = req.body as {
+      title?: string;
+      body: string;
+      criteria: { body: string; state_affecting?: boolean }[];
+      reason?: string;
+    } & Partial<Provenance>;
+    const p = requireProvenance(b);
+
+    const existing = (await pool.query('SELECT * FROM requirement WHERE id = $1', [id])).rows[0];
+    if (!existing) throw new ServiceError('not_found', `requirement ${id} not found`, 404);
+    if (existing.state === 'closed') {
+      throw new ServiceError(
+        'requirement_closed',
+        `requirement ${id} is closed and cannot be redrafted`,
+      );
+    }
+
+    const newHash = contentHash(b.body);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows: reqRows } = await client.query(
+        `UPDATE requirement
+            SET title = $1, body = $2, source_text_hash = $3,
+                state = 'awaiting_requirement_approval',
+                drafted_by_model = $4, prompt_version = $5, grounding_hash = $6, temperature = $7,
+                updated_at = now()
+          WHERE id = $8
+          RETURNING *`,
+        [
+          b.title ?? existing.title, b.body, newHash,
+          p.drafted_by_model, p.prompt_version, p.grounding_hash, p.temperature ?? null,
+          id,
+        ],
+      );
+
+      // Criterion ids are kept stable across a redraft rather than deleted
+      // and recreated, on purpose: existing approval rows point at these ids
+      // by subject_id, and reusing them keeps that history attached to the
+      // same criterion instead of orphaning it. State resets to 'proposed'
+      // regardless of what it was - stale or approved - because the text
+      // underneath it is new either way.
+      const criteria = [];
+      for (const [i, c] of b.criteria.entries()) {
+        const { rows } = await client.query(
+          `INSERT INTO criterion (requirement_id, ordinal, body, content_hash, state_affecting, state)
+           VALUES ($1, $2, $3, $4, $5, 'proposed')
+           ON CONFLICT (requirement_id, ordinal) DO UPDATE
+             SET body = EXCLUDED.body, content_hash = EXCLUDED.content_hash,
+                 state_affecting = EXCLUDED.state_affecting, state = 'proposed', updated_at = now()
+           RETURNING *`,
+          [id, i + 1, c.body, contentHash(c.body), c.state_affecting ?? false],
+        );
+        criteria.push(rows[0]);
+      }
+      // A redraft with fewer criteria than the last one leaves the extra
+      // ordinals behind otherwise - drop them explicitly rather than let a
+      // stale criterion linger with no corresponding entry in the new draft.
+      await client.query('DELETE FROM criterion WHERE requirement_id = $1 AND ordinal > $2', [
+        id,
+        b.criteria.length,
+      ]);
+
+      await audit(
+        {
+          event: 'requirement_redrafted',
+          subject: `requirement:${id}`,
+          detail: {
+            jira_issue_key: existing.jira_issue_key,
+            previous_hash: existing.source_text_hash,
+            new_hash: newHash,
+            reason: b.reason ?? '',
+            criteria: criteria.length,
+          },
+        },
+        client,
+      );
+
+      await client.query('COMMIT');
+      return { requirement: reqRows[0], criteria };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   app.get('/requirements/:id', async (req) => {
@@ -226,7 +332,14 @@ export function buildServer(): FastifyInstance {
   app.get('/jira/preflight', async () => {
     const client = jiraClient();
     const me = await client.preflight();
-    return { ok: true, ...me };
+    // Auth succeeding says nothing about whether the configured field ids are
+    // real - that failure is otherwise silent (see validateFieldMap), so a
+    // caller relying on preflight to mean "this Jira setup actually works"
+    // needs this checked here, not discovered later as a pipeline stuck at
+    // gate1_pending with no explanation.
+    const fields = loadFieldMap();
+    await validateFieldMap(client, fields);
+    return { ok: true, ...me, fields };
   });
 
   /**

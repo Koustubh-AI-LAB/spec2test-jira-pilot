@@ -26,6 +26,14 @@ export interface ChangelogItem {
   to?: string;
 }
 
+export interface FakeComment {
+  id: string;
+  created: string;
+  body: unknown;
+  authorAccountId: string;
+  authorName: string;
+}
+
 export interface FakeTicketState {
   key: string;
   summary: string;
@@ -36,6 +44,7 @@ export interface FakeTicketState {
   verificationStatus?: string;
   changelog: ChangelogItem[];
   property?: PipelineProperty;
+  comments?: FakeComment[];
 }
 
 export interface FakeJira {
@@ -47,6 +56,8 @@ export interface FakeJira {
   setVerificationStatus(value: string, at: string, accountId?: string): void;
   /** Edits the summary and records it, the way a PO editing the ticket would. */
   editSummary(summary: string, at: string): void;
+  /** Adds a human comment, e.g. the PO's reason for a rejection. */
+  postComment(text: string, at: string, accountId?: string, authorName?: string): void;
 }
 
 const FIELD = 'customfield_10107';
@@ -63,7 +74,7 @@ function adf(text: string) {
 }
 
 export function fakeJira(initial: FakeTicketState): FakeJira {
-  const state: FakeTicketState = { status: 'Backlog', labels: [], ...initial };
+  const state: FakeTicketState = { status: 'Backlog', labels: [], comments: [], ...initial };
   const writes: { method: string; path: string; body: unknown }[] = [];
 
   async function request(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -78,7 +89,27 @@ export function fakeJira(initial: FakeTicketState): FakeJira {
         state.property = undefined;
       }
       if (method === 'POST' && path.endsWith('/comment')) {
-        return { id: String(writes.length), created: '2026-09-11T10:00:00.000+0530' };
+        // Actually stored, not just acknowledged: the crash-recovery path
+        // (findPostedComment in write.ts) works by searching real comment
+        // content for a fingerprint marker, so the fake has to hold onto
+        // what was posted or that recovery path is untestable here.
+        const comment: FakeComment = {
+          id: String((state.comments?.length ?? 0) + 1),
+          created: '2026-09-11T10:00:00.000+0530',
+          body: (body as { body: unknown }).body,
+          // Comments the service itself posts (criteria, drift, refusals) are
+          // never mistaken for a human's rejection reason: findRejectionReason
+          // matches on the CHANGE's author, and this account id is never that.
+          authorAccountId: 'acct-system',
+          authorName: 'spec2test',
+        };
+        state.comments = [...(state.comments ?? []), comment];
+        return comment;
+      }
+      if (method === 'DELETE' && path.includes('/comment/')) {
+        const id = path.split('/comment/')[1];
+        state.comments = (state.comments ?? []).filter((c) => c.id !== id);
+        return undefined;
       }
       return undefined;
     }
@@ -86,6 +117,20 @@ export function fakeJira(initial: FakeTicketState): FakeJira {
     if (path.includes('/properties/spec2test')) {
       if (!state.property) throw new JiraError('jira_request_failed', 'not found', 404);
       return { value: state.property };
+    }
+
+    if (path.includes('/comment')) {
+      // Reshaped to match RawComment in read.ts - author as a nested object,
+      // not the flat fields FakeComment stores for convenience. total
+      // included so fetchComments' pagination terminates the way it does
+      // against real Jira, not only via the short-page fallback.
+      const comments = (state.comments ?? []).map((c) => ({
+        id: c.id,
+        created: c.created,
+        body: c.body,
+        author: { accountId: c.authorAccountId, displayName: c.authorName },
+      }));
+      return { comments, total: comments.length };
     }
 
     if (path.includes('/changelog')) {
@@ -146,6 +191,16 @@ export function fakeJira(initial: FakeTicketState): FakeJira {
     editSummary(summary, at) {
       state.changelog.push({ at, field: 'summary', from: state.summary, to: summary });
       state.summary = summary;
+    },
+    postComment(text, at, accountId = 'acct-po', authorName = 'PO') {
+      const comment: FakeComment = {
+        id: String((state.comments?.length ?? 0) + 1),
+        created: at,
+        body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+        authorAccountId: accountId,
+        authorName,
+      };
+      state.comments = [...(state.comments ?? []), comment];
     },
   };
 }

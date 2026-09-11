@@ -4,10 +4,11 @@ A requirement leaves Jira, becomes a test that is proven to actually catch the
 bug it claims to, and the result lands back on the ticket. The developer stays
 in their IDE; the product owner stays in Jira.
 
-**Status: build step 2 of 8.** The State Service exists and its gate logic is
-proven, and Jira read-back and write-back are live: a PO approving in Jira
-closes Gate 1 with no webhook. There is no drafting, no codegen and no fault
-injection yet.
+**Status: build step 2 of 8, hardened.** The State Service exists and its gate
+logic is proven; Jira read-back and write-back are live, with the PO's
+approval or rejection in Jira closing or reopening Gate 1, no webhook, and a
+real redraft path for a requirement that drifted or was rejected. There is no
+drafting, no codegen and no fault injection yet.
 
 ## Why a service and not just a Claude Code skill
 
@@ -38,8 +39,10 @@ docker compose up -d postgres
 cd service
 cp ../.env.example ../.env        # then fill in as needed
 npm run migrate                   # runs as the owner role
-npm test                          # 44 tests, needs the container above
-                                  # (the 10 Jira tests skip without a token)
+npm test                          # 58 tests, needs the container above
+                                  # (12 of them are live Jira tests, skipped if
+                                  #  JIRA_API_TOKEN is unset - but a token that
+                                  #  is SET and dead fails loud, it doesn't skip)
 npm start                         # http://127.0.0.1:8787
 ```
 
@@ -52,13 +55,30 @@ Jira is never asked to call back. Each run reads the ticket's current state and
 reconciles Postgres against it, which is why the service can live on a laptop
 that is switched off between sessions.
 
-The PO closes Gate 1 by setting **Verification Status** to *Criteria Approved*.
-The reconcile then answers a question a webhook would have answered for free:
-not just "was it approved?" but **"what was the approver looking at?"** It binds
-the approval to the criteria hashes recorded when the comment was posted, and
-refuses the approval outright if the requirement was edited in the window
-between posting and approving - the one case where guessing would defeat the
-point of hashing at all.
+The PO closes Gate 1 by setting **Verification Status** to *Criteria Approved*,
+or reopens it by setting it to *Criteria Rejected*. Either way the reconcile
+answers a question a webhook would have answered for free: not just "what did
+they decide?" but **"what were they looking at when they decided it?"** It
+binds the decision to the criteria hashes recorded when the comment was
+posted, and refuses to honour it outright if the requirement was edited in the
+window between posting and the decision - the one case where guessing would
+defeat the point of hashing at all.
+
+A rejection captures the PO's own comment as the reason - a select field has
+no free-text slot, so the reason has to come from wherever they actually wrote
+it. Since there is no reliable way to know whether they type the comment
+before or after flipping the field, the nearest comment by the same person
+within a 30-minute window on either side is taken as the reason; anything
+further off is assumed unrelated. Criteria are marked `rejected`, never
+deleted, and the requirement returns to `draft` - nothing here redrafts on its
+own, since drafting needs an LLM this service never calls; the reason is
+there for the next session to redraft with as context.
+
+**The "Criteria Rejected" option needs adding to the live field's choices** -
+it does not exist on the `S2T` project's `Verification Status` select yet
+(only `Not Started` / `Criteria Drafted` / `Criteria Approved` / `Tests
+Drafted` / `Tests Approved` / `Certified` / `Stale` were provisioned).
+Blocked on a working API token as of this writing; see the open item below.
 
 Two things learned the hard way, both load-bearing:
 
@@ -97,11 +117,24 @@ Not "the code runs" — specifically:
 - flattening a Jira description is stable, so a document nobody edited cannot
   hash differently and spuriously reopen a gate;
 - editing the requirement after approval marks the criteria stale rather than
-  letting the approval stand.
+  letting the approval stand - **and a redraft genuinely recovers from that**,
+  not just once: approve, drift, redraft, re-approve ends with everything
+  actually approved, not with a reconcile that claims success while nothing
+  moved (the bug that shipped once and is now a regression test, not a memory);
+- an approval or rejection with no record of what was actually presented is
+  refused outright, never guessed at from the row's current text;
+- a rejection is bound to the PO's own comment as its reason, never a comment
+  from before the decision or from someone else, and sends the requirement
+  back to `draft` without deleting the criteria it rejected;
+- a crash between a comment landing on the ticket and our own record of it
+  is recovered from by finding the comment again, not by posting a duplicate.
 
-They run against a real Postgres and the real Jira site rather than mocks: every
-one of those claims is a SQL-level or API-level guarantee, and a mocked client
-would prove none of them.
+They run against a real Postgres and, for the parts that need it, a real Jira
+site or a scripted stand-in that proves multi-step sequences fast and
+deterministically. See `service/test/lifecycle.test.ts` for why the sequence
+tests exist separately from the one-transition-at-a-time ones: every bug found
+in the second bug-hunting pass lived in a sequence no single-transition test
+could have caught.
 
 The full plan, including the readiness gates this has to clear before it points
 at a company system, is in

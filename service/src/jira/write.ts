@@ -4,7 +4,7 @@ import type { FieldMap, PipelineProperty } from './read.ts';
 import { contentHash } from '../hash.ts';
 import { audit } from '../audit.ts';
 import type { AdfNode } from './adf.ts';
-import { textToAdf } from './adf.ts';
+import { adfToText, textToAdf } from './adf.ts';
 
 /**
  * Write-back to the ticket: the PO's surface.
@@ -57,7 +57,16 @@ function fingerprintOf(input: PostCriteriaInput, coverageState: string): string 
   return contentHash(payload);
 }
 
-function criteriaComment(input: PostCriteriaInput, browseUrl: string): AdfNode {
+/**
+ * Prefix for the marker line every posted comment carries, so a crash between
+ * the comment landing and the property write can be recovered from: the next
+ * run can tell "already posted, just finish recording it" from "never
+ * posted" by searching Jira's own comments instead of trusting only our
+ * bookkeeping, which is exactly the thing that crashed.
+ */
+const MARKER_PREFIX = 'spec2test:fingerprint:';
+
+function criteriaComment(input: PostCriteriaInput, browseUrl: string, fingerprint: string): AdfNode {
   const heading = {
     type: 'paragraph',
     content: [
@@ -120,7 +129,35 @@ function criteriaComment(input: PostCriteriaInput, browseUrl: string): AdfNode {
     ],
   };
 
-  return { type: 'doc', version: 1, content: [heading, instruction, list, footer] } as AdfNode;
+  // Not shown to the PO in any meaningful way (it is the last line of a
+  // comment they have no reason to read closely), but has to be plain,
+  // undecorated text so a later flatten-and-substring-search finds it
+  // reliably regardless of what marks or node types surround it.
+  const marker = {
+    type: 'paragraph',
+    content: [{ type: 'text', text: `${MARKER_PREFIX}${fingerprint}` }],
+  };
+
+  return { type: 'doc', version: 1, content: [heading, instruction, list, footer, marker] } as AdfNode;
+}
+
+/**
+ * Finds a comment already carrying this fingerprint's marker, if one made it
+ * to Jira before a previous run crashed partway through. Recent-first: the
+ * comment we are looking for, if it exists, was posted on the most recent
+ * write attempt, not on some earlier draft.
+ */
+async function findPostedComment(
+  client: JiraClient,
+  issueKey: string,
+  fingerprint: string,
+): Promise<{ id: string; created: string } | undefined> {
+  const res = await client.get<{ comments: { id: string; created: string; body: unknown }[] }>(
+    `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment?orderBy=-created&maxResults=20`,
+  );
+  const marker = `${MARKER_PREFIX}${fingerprint}`;
+  const match = res.comments.find((c) => adfToText(c.body).includes(marker));
+  return match && { id: match.id, created: match.created };
 }
 
 /**
@@ -154,11 +191,16 @@ export async function postCriteria(
     update: { labels: [{ add: LABEL }] },
   });
 
-  const comment = await client.request<{ created?: string }>(
+  // Recovers from the crash window this fingerprint scheme could not close on
+  // its own: if a previous run posted the comment and then died before
+  // writeProperty, `existing` above never advanced, so this run would
+  // otherwise post a second, identical comment. Check Jira itself first.
+  const already = await findPostedComment(client, input.issueKey, fingerprint);
+  const comment = already ?? (await client.request<{ id: string; created?: string }>(
     'POST',
     `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`,
-    { body: criteriaComment(input, client.browseUrl(input.issueKey)) },
-  );
+    { body: criteriaComment(input, client.browseUrl(input.issueKey), fingerprint) },
+  ));
 
   // The approval-window check compares this against changelog timestamps,
   // which are Jira's clock - so this has to be Jira's clock too, not ours.
@@ -190,10 +232,17 @@ export async function postCriteria(
       criteria: input.criteria.length,
       fingerprint,
       requirement_hash: input.requirementHash,
+      recovered: Boolean(already),
     },
   });
 
-  return { wrote: true, reason: `posted ${input.criteria.length} criteria`, fingerprint };
+  return {
+    wrote: true,
+    reason: already
+      ? `recovered from an incomplete previous write - comment already existed, property record completed`
+      : `posted ${input.criteria.length} criteria`,
+    fingerprint,
+  };
 }
 
 /** Mark the ticket stale after drift, so the PO learns it from Jira. */

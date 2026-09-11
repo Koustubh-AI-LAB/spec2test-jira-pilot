@@ -354,3 +354,84 @@ describe('audit ledger is append-only at the privilege level', () => {
     await assert.rejects(getPool().query('DELETE FROM audit_event'), /permission denied/i);
   });
 });
+
+describe('redraft', () => {
+  it('updates the hash, resets criteria off stale, and keeps criterion ids stable', async () => {
+    const { requirement } = await seedRequirement('REDRAFT-1');
+    const c1 = (
+      await post(`/requirements/${requirement.id}/criteria`, {
+        criteria: [{ body: 'first criterion' }, { body: 'second criterion' }],
+      })
+    ).body.criteria;
+
+    // Simulate what drift does: mark everything stale, the way reconcile.ts's
+    // markStale would after the requirement text changed under an approval.
+    await getPool().query(
+      `UPDATE criterion SET state = 'stale' WHERE requirement_id = $1`,
+      [requirement.id],
+    );
+    await getPool().query(`UPDATE requirement SET state = 'stale' WHERE id = $1`, [requirement.id]);
+
+    const res = await post(`/requirements/${requirement.id}/redraft`, {
+      title: 'Members may hold at most 5 books',
+      body: 'A member may hold at most 5 books at once. A 6th request returns 400 LOAN_LIMIT.',
+      criteria: [{ body: 'first criterion, restated' }, { body: 'second criterion' }],
+      ...PROVENANCE,
+      reason: 'requirement text changed after approval',
+    });
+
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.notEqual(res.body.requirement.source_text_hash, requirement.source_text_hash);
+    assert.equal(res.body.requirement.state, 'awaiting_requirement_approval');
+    assert.ok(res.body.criteria.every((c: { state: string }) => c.state === 'proposed'));
+
+    // Ordinal 1 kept its id: a criterion reworded in a redraft is still the
+    // same criterion for approval-history purposes, not a new row.
+    assert.equal(
+      res.body.criteria.find((c: { ordinal: number }) => c.ordinal === 1).id,
+      c1[0].id,
+    );
+  });
+
+  it('drops criteria beyond the new count rather than leaving them behind', async () => {
+    const { requirement } = await seedRequirement('REDRAFT-2');
+    await post(`/requirements/${requirement.id}/criteria`, {
+      criteria: [{ body: 'one' }, { body: 'two' }, { body: 'three' }],
+    });
+
+    await post(`/requirements/${requirement.id}/redraft`, {
+      body: 'a shorter requirement now',
+      criteria: [{ body: 'one, revised' }],
+      ...PROVENANCE,
+    });
+
+    const { rows } = await getPool().query(
+      'SELECT ordinal FROM criterion WHERE requirement_id = $1 ORDER BY ordinal',
+      [requirement.id],
+    );
+    assert.deepEqual(rows.map((r) => r.ordinal), [1]);
+  });
+
+  it('refuses to redraft a requirement that is already closed', async () => {
+    const { requirement } = await seedRequirement('REDRAFT-3');
+    await getPool().query(`UPDATE requirement SET state = 'closed' WHERE id = $1`, [requirement.id]);
+
+    const res = await post(`/requirements/${requirement.id}/redraft`, {
+      body: 'anything',
+      criteria: [],
+      ...PROVENANCE,
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.event, 'requirement_closed');
+  });
+
+  it('requires provenance, same as an original draft', async () => {
+    const { requirement } = await seedRequirement('REDRAFT-4');
+    const res = await post(`/requirements/${requirement.id}/redraft`, {
+      body: 'anything',
+      criteria: [],
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.event, 'provenance_required');
+  });
+});

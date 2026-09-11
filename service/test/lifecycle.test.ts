@@ -10,8 +10,10 @@
  */
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import type { FastifyInstance } from 'fastify';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
+import { buildServer } from '../src/api/server.ts';
 import { contentHash } from '../src/hash.ts';
 import { reconcile } from '../src/jira/reconcile.ts';
 import { postCriteria } from '../src/jira/write.ts';
@@ -22,11 +24,20 @@ process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localho
 process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
 
 const ISSUE = 'FAKE-1';
+const PROVENANCE = {
+  drafted_by_model: 'claude-opus-5',
+  prompt_version: 'draft-v1',
+  grounding_hash: 'redraft-test',
+  temperature: 0,
+};
 let requirementId: string;
 let criterionIds: string[];
+let app: FastifyInstance;
 
 before(async () => {
   await migrate();
+  app = buildServer();
+  await app.ready();
 });
 
 beforeEach(async () => {
@@ -34,6 +45,7 @@ beforeEach(async () => {
 });
 
 after(async () => {
+  await app?.close();
   await closePool();
 });
 
@@ -82,6 +94,17 @@ async function requirementState(): Promise<string> {
     requirementId,
   ]);
   return rows[0].state;
+}
+
+/** Calls the real POST /requirements/:id/redraft route via app.inject. */
+async function redraft(title: string, body: string, criteria: string[]) {
+  const res = await app.inject({
+    method: 'POST',
+    url: `/requirements/${requirementId}/redraft`,
+    payload: { title, body, criteria: criteria.map((c) => ({ body: c })), ...PROVENANCE },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  return res.json() as { requirement: { source_text_hash: string }; criteria: unknown[] };
 }
 
 async function presentCriteria(jira: FakeJira, hash: string) {
@@ -139,18 +162,19 @@ describe('the post-drift lifecycle', () => {
     const staleActor = await reconcile(jira.client, ISSUE, { dryRun: true });
     assert.notEqual(staleActor.action, 'gate1_closed', 'reported closed while still stale');
 
-    // 3. Re-present against the new text, then re-approve.
-    //
-    // Updating requirement.source_text_hash after a redraft is its own
-    // feature (Phase B / B1 - there is no route for it yet). Standing in for
-    // it here with a direct update keeps this test scoped to what Phase A
-    // actually fixes: whether re-approval works once the local state agrees
-    // with Jira, not whether the redraft path itself exists.
-    const newHash = contentHash('members hold up to 5 books\n\na member may hold at most 3 books');
-    await getPool().query(
-      `UPDATE requirement SET source_text_hash = $1, state = 'awaiting_requirement_approval' WHERE id = $2`,
-      [newHash, requirementId],
+    // 3. Redraft through the real route (B1), then re-present and re-approve.
+    const redrafted = await redraft(
+      'members hold up to 5 books',
+      'members hold up to 5 books\n\na member may hold at most 3 books',
+      ['criterion one', 'criterion two'],
     );
+    const newHash = redrafted.requirement.source_text_hash;
+    assert.deepEqual(
+      (await criteriaRows()).map((r) => r.state),
+      ['proposed', 'proposed'],
+      'redraft did not reset criteria off stale',
+    );
+
     const outcome = await presentCriteria(jira, newHash);
     assert.equal(outcome.wrote, true, 'did not re-post after drift');
 
@@ -199,5 +223,99 @@ describe('the post-drift lifecycle', () => {
 
     const result = await reconcile(jira.client, ISSUE);
     assert.notEqual(result.action, 'gate1_closed', 'honoured an approval made during an edit window');
+  });
+
+  it('recovers from a crash between the comment landing and the property write', async () => {
+    const { hash } = await seed('t3', 'body3');
+    const jira = fakeJira({ key: ISSUE, summary: 't3', description: 'body3', changelog: [] });
+
+    const first = await presentCriteria(jira, hash);
+    assert.equal(first.wrote, true);
+    assert.equal(jira.state.comments?.length, 1, 'first post did not create a comment');
+
+    // The exact failure this guards against: the comment landed, but the
+    // process died before the property write recorded it. Simulated by
+    // wiping the property while leaving the comment (and its fingerprint
+    // marker) sitting on the ticket, exactly where a crash would leave it.
+    jira.state.property = undefined;
+
+    const second = await presentCriteria(jira, hash);
+    assert.equal(second.wrote, true);
+    assert.match(second.reason, /recovered/, 'did not recognise the already-posted comment');
+    assert.equal(
+      jira.state.comments?.length,
+      1,
+      'posted a duplicate comment instead of recovering the existing one',
+    );
+
+    // The property is back, so the approval-window check has something to
+    // measure against again.
+    assert.ok(jira.state.property?.criteria_posted_at, 'did not recover criteria_posted_at');
+  });
+});
+
+describe('gate 1 rejection', () => {
+  it('rejects criteria, captures the PO comment as the reason, and returns the requirement to draft', async () => {
+    const { hash } = await seed('t4', 'body4');
+    const jira = fakeJira({ key: ISSUE, summary: 't4', description: 'body4', changelog: [] });
+    await presentCriteria(jira, hash);
+
+    jira.postComment(
+      'These do not cover the negative case - please redraft with an explicit 401 check.',
+      '2026-09-11T09:05:00.000+0530',
+    );
+    jira.setVerificationStatus('Criteria Rejected', '2026-09-11T09:10:00.000+0530');
+
+    const result = await reconcile(jira.client, ISSUE);
+    assert.equal(result.action, 'gate1_rejected', result.detail);
+    assert.equal(result.gate1?.decision, 'rejected');
+    assert.match(result.gate1?.reason ?? '', /negative case/);
+
+    assert.deepEqual(
+      (await criteriaRows()).map((r) => r.state),
+      ['rejected', 'rejected'],
+    );
+    assert.equal(await requirementState(), 'draft');
+  });
+
+  it('is idempotent: a second reconcile does not re-reject', async () => {
+    const { hash } = await seed('t5', 'body5');
+    const jira = fakeJira({ key: ISSUE, summary: 't5', description: 'body5', changelog: [] });
+    await presentCriteria(jira, hash);
+    jira.postComment('no good', '2026-09-11T09:05:00.000+0530');
+    jira.setVerificationStatus('Criteria Rejected', '2026-09-11T09:10:00.000+0530');
+    await reconcile(jira.client, ISSUE);
+
+    const countBefore = await getPool().query(`SELECT count(*)::int AS n FROM approval WHERE gate = 1`);
+    const second = await reconcile(jira.client, ISSUE);
+    assert.equal(second.action, 'up_to_date', second.detail);
+    const countAfter = await getPool().query(`SELECT count(*)::int AS n FROM approval WHERE gate = 1`);
+    assert.equal(countAfter.rows[0].n, countBefore.rows[0].n);
+  });
+
+  it('does not use a comment left before the rejection as the reason', async () => {
+    const { hash } = await seed('t6', 'body6');
+    const jira = fakeJira({ key: ISSUE, summary: 't6', description: 'body6', changelog: [] });
+    await presentCriteria(jira, hash);
+
+    // Left BEFORE the field changed - instructions, not an explanation.
+    jira.postComment('drafting now, back soon', '2026-09-11T08:00:00.000+0530');
+    jira.setVerificationStatus('Criteria Rejected', '2026-09-11T09:10:00.000+0530');
+
+    const result = await reconcile(jira.client, ISSUE);
+    assert.equal(result.action, 'gate1_rejected', result.detail);
+    assert.equal(result.gate1?.reason, undefined, 'used a comment that predates the rejection');
+  });
+
+  it('a rejection made during an edit window is not honoured either', async () => {
+    const { hash } = await seed('t7', 'body7');
+    const jira = fakeJira({ key: ISSUE, summary: 't7', description: 'body7', changelog: [] });
+    await presentCriteria(jira, hash);
+
+    jira.editSummary('t7 amended', '2026-09-11T09:15:00.000+0530');
+    jira.setVerificationStatus('Criteria Rejected', '2026-09-11T09:20:00.000+0530');
+
+    const result = await reconcile(jira.client, ISSUE);
+    assert.notEqual(result.action, 'gate1_rejected', 'honoured a rejection made during an edit window');
   });
 });

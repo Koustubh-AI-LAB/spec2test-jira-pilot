@@ -1,7 +1,8 @@
 import type { JiraClient } from './client.ts';
-import { requirementText } from './adf.ts';
+import { requirementText, adfToText } from './adf.ts';
 import { contentHash } from '../hash.ts';
-import { byInstant } from './time.ts';
+import { byInstant, instant } from './time.ts';
+import { ServiceError } from '../errors.ts';
 
 /**
  * Everything the reconcile needs from Jira, fetched in the shape it needs it.
@@ -37,11 +38,40 @@ export function loadFieldMap(env: NodeJS.ProcessEnv = process.env): FieldMap {
   };
 }
 
+/**
+ * Confirms every configured field id actually exists in this Jira site.
+ *
+ * A missing or mistyped id is the one failure mode nothing else catches: a
+ * read of an unknown custom field just comes back `undefined`, so
+ * `Verification Status` silently reads as "(unset)" forever and the pipeline
+ * sits at `gate1_pending` with no error anywhere. `.env` fell into exactly
+ * this - it shipped with none of the JIRA_FIELD_* variables set, and only
+ * worked because DEFAULT_FIELDS happened to hardcode this site's own ids.
+ * A write against a bad id at least fails loud (Jira refuses it); a read
+ * never does, which is why this has to be checked up front rather than left
+ * to surface on its own.
+ */
+export async function validateFieldMap(client: JiraClient, fields: FieldMap): Promise<void> {
+  const known = await client.get<{ id: string }[]>('/rest/api/3/field');
+  const knownIds = new Set(known.map((f) => f.id));
+
+  const missing = Object.entries(fields).filter(([, id]) => !knownIds.has(id));
+  if (missing.length > 0) {
+    throw new ServiceError(
+      'jira_field_not_found',
+      'these configured field ids do not exist on this Jira site: ' +
+        missing.map(([key, id]) => `${key}=${id}`).join(', ') +
+        ' - check JIRA_FIELD_* in .env against the site\'s actual custom field ids',
+    );
+  }
+}
+
 /** The PO's Gate 1 signal. */
 export const VERIFICATION_STATUS = {
   notStarted: 'Not Started',
   criteriaDrafted: 'Criteria Drafted',
   criteriaApproved: 'Criteria Approved',
+  criteriaRejected: 'Criteria Rejected',
   testsDrafted: 'Tests Drafted',
   testsApproved: 'Tests Approved',
   certified: 'Certified',
@@ -55,6 +85,15 @@ export interface ChangelogEntry {
   field: string;
   from: string;
   to: string;
+}
+
+export interface CommentEntry {
+  id: string;
+  created: string;
+  authorAccountId: string;
+  authorName: string;
+  /** Flattened via adfToText - same treatment as the requirement description. */
+  text: string;
 }
 
 export interface TicketSnapshot {
@@ -71,6 +110,8 @@ export interface TicketSnapshot {
   changelog: ChangelogEntry[];
   /** Our own bookkeeping, stored on the ticket itself. */
   property: PipelineProperty | undefined;
+  /** Oldest first, same convention as changelog. Used to find a rejection's reason. */
+  comments: CommentEntry[];
 }
 
 /**
@@ -144,6 +185,7 @@ export async function fetchTicket(
     updated: String(issue.fields.updated ?? ''),
     changelog: await fetchChangelog(client, issueKey),
     property: await fetchProperty(client, issueKey),
+    comments: await fetchComments(client, issueKey),
   };
 }
 
@@ -175,8 +217,13 @@ export async function fetchChangelog(
         });
       }
     }
-    const seen = startAt + (page.values?.length ?? 0);
-    if (page.isLast || !page.values?.length || (page.total !== undefined && seen >= page.total)) {
+    // Short page is checked in addition to isLast/total, not instead of them -
+    // fetchComments' equivalent loop found this the hard way: relying only on
+    // a field the response might not actually carry turns a missing field
+    // into an infinite loop instead of an obvious error.
+    const got = page.values?.length ?? 0;
+    const seen = startAt + got;
+    if (page.isLast || got === 0 || got < pageSize || (page.total !== undefined && seen >= page.total)) {
       break;
     }
   }
@@ -184,6 +231,51 @@ export async function fetchChangelog(
   // Sorted as instants, not strings: Jira sends offset timestamps (+0530) and a
   // lexicographic sort across mixed offsets orders them wrongly.
   return out.sort(byInstant);
+}
+
+interface RawComment {
+  id: string;
+  created: string;
+  author?: { accountId?: string; displayName?: string };
+  body: unknown;
+}
+
+/**
+ * Oldest first, same convention as the changelog. Used to find the PO's own
+ * explanation for a rejection - a select field has no free-text slot for one,
+ * so the reason has to come from wherever they actually wrote it.
+ */
+export async function fetchComments(client: JiraClient, issueKey: string): Promise<CommentEntry[]> {
+  const out: CommentEntry[] = [];
+  const pageSize = 100;
+
+  for (let startAt = 0; ; startAt += pageSize) {
+    const page = await client.get<{ comments: RawComment[]; total?: number }>(
+      `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment?startAt=${startAt}&maxResults=${pageSize}&orderBy=created`,
+    );
+    for (const c of page.comments ?? []) {
+      out.push({
+        id: c.id,
+        created: c.created,
+        authorAccountId: c.author?.accountId ?? '',
+        authorName: c.author?.displayName ?? '',
+        text: adfToText(c.body),
+      });
+    }
+    // A short page is the reliable exit signal on its own - fewer results
+    // than requested means there is nothing left to fetch, regardless of
+    // whether `total` came back at all. Relying on `total` alone found its
+    // own bug during testing: a page that never reports `total` fetches the
+    // same page forever, silently looping the caller straight into an OOM
+    // rather than an obvious error.
+    const got = page.comments?.length ?? 0;
+    const seen = startAt + got;
+    if (got === 0 || got < pageSize || (page.total !== undefined && seen >= page.total)) break;
+  }
+
+  // byInstant expects an `.at` field (the changelog's shape); comments carry
+  // `.created` instead, so sort by instant() directly rather than reuse it.
+  return out.sort((a, b) => instant(a.created) - instant(b.created));
 }
 
 export async function fetchProperty(
