@@ -1,5 +1,6 @@
 import type { JiraClient } from './client.ts';
 import { fetchTicket, loadFieldMap, VERIFICATION_STATUS } from './read.ts';
+import { isServiceComment } from './write.ts';
 import type { FieldMap, TicketSnapshot, ChangelogEntry } from './read.ts';
 import { decide } from '../gates/gates.ts';
 import type { Decision } from '../gates/gates.ts';
@@ -426,6 +427,12 @@ function findRejectionReason(ticket: TicketSnapshot, change: ChangelogEntry): st
   const changeMs = instant(change.at);
   const byProximity = comments
     .filter((c) => c.authorAccountId === change.authorAccountId)
+    // The service authenticates as the same account as the human tester in
+    // this pilot, so accountId alone cannot tell "the PO wrote this" from
+    // "the service wrote this while impersonating the PO's credentials" -
+    // found the hard way when the service's own refusal notice, posted
+    // moments earlier, was picked up here as if it were the PO's reason.
+    .filter((c) => !isServiceComment(c.text))
     .map((c) => ({ c, distance: Math.abs(instant(c.created) - changeMs) }))
     .filter(({ distance }) => Number.isFinite(distance) && distance <= REASON_WINDOW_MS)
     .sort((a, b) => a.distance - b.distance);

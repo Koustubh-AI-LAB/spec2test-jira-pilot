@@ -66,6 +66,24 @@ function fingerprintOf(input: PostCriteriaInput, coverageState: string): string 
  */
 const MARKER_PREFIX = 'spec2test:fingerprint:';
 
+/**
+ * Every comment the service posts is required to start with this - not just
+ * for humans to recognise, but so the service itself can tell its own
+ * comments apart from a person's. That distinction matters in this pilot
+ * specifically: the service authenticates as the same Jira account as the
+ * human tester, so a bot-posted comment and a human-written one are
+ * otherwise indistinguishable by author alone. A real deployment would run
+ * under its own service account and this would be redundant - here it is
+ * load-bearing. See findRejectionReason in reconcile.ts, which found this
+ * out the hard way: its own refusal notice, posted moments earlier, got
+ * mistaken for the PO's actual rejection reason.
+ */
+export const SERVICE_COMMENT_PREFIX = 'spec2test:';
+
+export function isServiceComment(text: string): boolean {
+  return text.startsWith(SERVICE_COMMENT_PREFIX);
+}
+
 function criteriaComment(input: PostCriteriaInput, browseUrl: string, fingerprint: string): AdfNode {
   const heading = {
     type: 'paragraph',
@@ -275,9 +293,9 @@ export async function postDrift(
             {
               type: 'text',
               text:
-                'The requirement text changed after these criteria were approved, so the ' +
-                'approval no longer applies. Existing tests keep running, but stop counting ' +
-                'as certified until the criteria are re-approved.',
+                'spec2test: the requirement text changed after these criteria were approved, ' +
+                'so the approval no longer applies. Existing tests keep running, but stop ' +
+                'counting as certified until the criteria are re-approved.',
             },
           ],
         },
