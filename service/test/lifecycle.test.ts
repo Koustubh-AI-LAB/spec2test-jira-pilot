@@ -307,6 +307,28 @@ describe('gate 1 rejection', () => {
     assert.equal(result.gate1?.reason, undefined, 'used a comment that predates the rejection');
   });
 
+  it('never quotes its own comment back as the PO\'s reason', async () => {
+    // The exact failure this guards against: in a pilot where the service
+    // authenticates as the same Jira account as the human tester, a comment
+    // the SERVICE posted (e.g. a refusal notice from an earlier attempt) is
+    // otherwise indistinguishable by author from one the PO actually wrote -
+    // and close in time, since both happen around the same decision.
+    const { hash } = await seed('t8', 'body8');
+    const jira = fakeJira({ key: ISSUE, summary: 't8', description: 'body8', changelog: [] });
+    await presentCriteria(jira, hash);
+
+    jira.postComment(
+      'spec2test: rejection blocked: no presentation record found for these criteria.',
+      '2026-09-11T09:09:00.000+0530',
+      'acct-po', // same account the rejection itself comes from
+    );
+    jira.setVerificationStatus('Criteria Rejected', '2026-09-11T09:10:00.000+0530');
+
+    const result = await reconcile(jira.client, ISSUE);
+    assert.equal(result.action, 'gate1_rejected', result.detail);
+    assert.equal(result.gate1?.reason, undefined, 'quoted its own comment back as the reason');
+  });
+
   it('a rejection made during an edit window is not honoured either', async () => {
     const { hash } = await seed('t7', 'body7');
     const jira = fakeJira({ key: ISSUE, summary: 't7', description: 'body7', changelog: [] });
