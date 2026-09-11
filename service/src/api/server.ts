@@ -9,7 +9,7 @@ import { capabilitiesFor, isEnvironmentClass } from '../env/capabilities.ts';
 import { EnvironmentNotAllowedError, ServiceError } from '../errors.ts';
 import { jiraClient } from '../jira/client.ts';
 import { reconcile } from '../jira/reconcile.ts';
-import { postCriteria, postDrift } from '../jira/write.ts';
+import { postCriteria, postDrift, postRefusal } from '../jira/write.ts';
 import type { CriterionView } from '../jira/write.ts';
 
 /**
@@ -240,10 +240,19 @@ export function buildServer(): FastifyInstance {
     const client = jiraClient();
     const result = await reconcile(client, issueKey, { dryRun: dry_run ?? false });
 
-    // Drift found by the reconcile is reported back onto the ticket, so the PO
-    // sees it in Jira rather than only in a developer's terminal.
+    // Any outcome the PO would otherwise not see is reported back onto the
+    // ticket, not just drift - a refused or partially-closed approval leaves
+    // "Criteria Approved" sitting on the ticket looking closed, and the PO has
+    // no other way to learn it was not honoured.
     if (!result.dryRun && result.action === 'drift_detected' && result.drift) {
       await postDrift(client, issueKey, result.drift);
+    } else if (
+      !result.dryRun &&
+      (result.action === 'approval_unverifiable' ||
+        result.action === 'gate1_partial' ||
+        result.action === 'gate1_blocked')
+    ) {
+      await postRefusal(client, issueKey, result);
     }
     const { ticket, ...rest } = result;
     return { ...rest, ticket: ticket && { summary: ticket.summary, status: ticket.status,

@@ -21,6 +21,8 @@ export type ReconcileAction =
   | 'no_local_instance'
   | 'drift_detected'
   | 'gate1_closed'
+  | 'gate1_partial'
+  | 'gate1_blocked'
   | 'gate1_pending'
   | 'approval_unverifiable'
   | 'up_to_date';
@@ -189,53 +191,100 @@ export async function reconcile(
   const actor = approvalActor(approval);
   const posted = ticket.property?.criteria_posted ?? {};
   const rejected: string[] = [];
-  let closed = 0;
 
-  if (!dryRun) {
-    // One PO action fans out to one decision per criterion, each bound to its
-    // own hash. A single ticket-level flag would let a criterion reworded after
-    // the comment went up inherit an approval it was never shown for.
-    for (const criterion of pending) {
-      const seenHash = posted[criterion.id] ?? criterion.content_hash;
-      try {
-        const outcome = await decide(1, {
-          subjectId: criterion.id,
-          decision: 'approved',
-          actor,
-          channel: 'jira',
-          reason: `Verification Status -> ${VERIFICATION_STATUS.criteriaApproved} on ${issueKey}`,
-          seenHash,
-        });
-        if (outcome.recorded) closed++;
-      } catch (err) {
-        // One criterion whose text moved must not block the rest: record which
-        // could not be honoured and let the caller re-present those.
-        rejected.push(`${criterion.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+  // Split up front, and never fall back to the row's current hash when no
+  // presentation was recorded: the PO cannot have approved criteria that were
+  // never shown to them, so honouring that with a guessed hash would defeat
+  // the whole point of binding the approval to what was actually posted.
+  const toApprove: { criterion: LocalCriterion; seenHash: string }[] = [];
+  for (const criterion of pending) {
+    const seenHash = posted[criterion.id];
+    if (!seenHash) {
+      rejected.push(`${criterion.id}: no presentation record - cannot confirm what the approver saw`);
+      continue;
     }
-
-    await audit({
-      event: 'jira_gate1_reconciled',
-      subject: `requirement:${local.id}`,
-      actor,
-      detail: {
-        issue_key: issueKey,
-        approved_at: approval.at,
-        criteria_closed: closed,
-        criteria_rejected: rejected.length,
-        requirement_hash: ticket.requirementHash,
-        source: 'pull_reconcile',
-      },
-    });
+    toApprove.push({ criterion, seenHash });
   }
+
+  if (dryRun) {
+    const action: ReconcileAction =
+      toApprove.length === pending.length
+        ? 'gate1_closed'
+        : toApprove.length > 0
+          ? 'gate1_partial'
+          : 'gate1_blocked';
+    return {
+      ...base,
+      action,
+      detail:
+        `would close gate 1 for ${toApprove.length} of ${pending.length} pending criteria, ` +
+        `on ${actor}'s approval at ${approval.at}` +
+        (rejected.length ? `; ${rejected.length} blocked: ${rejected.join('; ')}` : '') +
+        '.',
+      localHash: local.source_text_hash,
+    };
+  }
+
+  // One PO action fans out to one decision per criterion, each bound to its
+  // own hash. A single ticket-level flag would let a criterion reworded after
+  // the comment went up inherit an approval it was never shown for.
+  let closed = 0;
+  for (const { criterion, seenHash } of toApprove) {
+    try {
+      const outcome = await decide(1, {
+        subjectId: criterion.id,
+        decision: 'approved',
+        actor,
+        channel: 'jira',
+        reason: `Verification Status -> ${VERIFICATION_STATUS.criteriaApproved} on ${issueKey}`,
+        seenHash,
+      });
+      if (outcome.recorded) closed++;
+    } catch (err) {
+      // One criterion whose text moved must not block the rest: record which
+      // could not be honoured and let the caller re-present those.
+      rejected.push(`${criterion.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  await audit({
+    event: 'jira_gate1_reconciled',
+    subject: `requirement:${local.id}`,
+    actor,
+    detail: {
+      issue_key: issueKey,
+      approved_at: approval.at,
+      criteria_closed: closed,
+      criteria_rejected: rejected.length,
+      requirement_hash: ticket.requirementHash,
+      source: 'pull_reconcile',
+    },
+  });
+
+  // The action reported (and, from the route, written back onto the ticket)
+  // has to reflect what actually happened, not what was attempted - this is
+  // what previously let a reconcile claim "gate1_closed" while every
+  // criterion sat untouched. Re-read rather than trust the loop's own count.
+  const { rows: finalStates } = await pool.query<{ state: string }>(
+    'SELECT state FROM criterion WHERE requirement_id = $1',
+    [local.id],
+  );
+  const allApproved = finalStates.length > 0 && finalStates.every((r) => r.state === 'approved');
+  const action: ReconcileAction = allApproved
+    ? 'gate1_closed'
+    : closed > 0
+      ? 'gate1_partial'
+      : 'gate1_blocked';
 
   return {
     ...base,
-    action: 'gate1_closed',
-    detail: dryRun
-      ? `would close gate 1 for ${pending.length} criteria, on ${actor}'s approval at ${approval.at}.`
-      : `gate 1 closed for ${closed} criteria on ${actor}'s approval at ${approval.at}` +
-        (rejected.length ? `; ${rejected.length} refused as stale.` : '.'),
+    action,
+    detail: allApproved
+      ? `gate 1 closed for ${closed} criteria on ${actor}'s approval at ${approval.at}.`
+      : `gate 1 ${closed > 0 ? 'partially closed' : 'blocked'}: ${closed} of ${pending.length} ` +
+        `criteria approved on ${actor}'s approval at ${approval.at}` +
+        (rejected.length ? `; ${rejected.length} blocked: ${rejected.join('; ')}` : '') +
+        '.',
     localHash: local.source_text_hash,
     gate1: { actor, at: approval.at, criteriaClosed: closed, criteriaRejected: rejected },
   };

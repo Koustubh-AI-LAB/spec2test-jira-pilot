@@ -4,6 +4,7 @@ import type { FieldMap, PipelineProperty } from './read.ts';
 import { contentHash } from '../hash.ts';
 import { audit } from '../audit.ts';
 import type { AdfNode } from './adf.ts';
+import { textToAdf } from './adf.ts';
 
 /**
  * Write-back to the ticket: the PO's surface.
@@ -144,8 +145,6 @@ export async function postCriteria(
     };
   }
 
-  const postedAt = new Date().toISOString();
-
   await client.request('PUT', `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}`, {
     fields: {
       [fields.verificationStatus]: { value: VERIFICATION_STATUS.criteriaDrafted },
@@ -155,11 +154,19 @@ export async function postCriteria(
     update: { labels: [{ add: LABEL }] },
   });
 
-  await client.request(
+  const comment = await client.request<{ created?: string }>(
     'POST',
     `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`,
     { body: criteriaComment(input, client.browseUrl(input.issueKey)) },
   );
+
+  // The approval-window check compares this against changelog timestamps,
+  // which are Jira's clock - so this has to be Jira's clock too, not ours.
+  // Skew between the two machines would otherwise shift the window in which
+  // an edit invalidates an approval, in either direction. Jira's own record
+  // of when the comment landed is the `created` field on its response; our
+  // local time is a fallback only for a malformed response, not the norm.
+  const postedAt = comment.created ?? new Date().toISOString();
 
   // Written last, and only after the comment lands. If the comment call fails,
   // the fingerprint is not advanced and the next run retries instead of
@@ -229,7 +236,13 @@ export async function postDrift(
     },
   });
 
+  // Merge, never replace: `criteria_posted` / `criteria_posted_at` are the
+  // only record of what the PO was actually shown, and the approval-window
+  // check in reconcile.ts depends on them surviving. Overwriting the property
+  // here previously wiped both, which silently turned that check into a
+  // no-op - any future approval was honoured with no evidence behind it.
   await writeProperty(client, issueKey, {
+    ...existing,
     coverage_state: 'stale',
     fingerprint,
     requirement_hash: drift.currentHash,
@@ -237,6 +250,42 @@ export async function postDrift(
   });
 
   return { wrote: true, reason: 'drift reported on the ticket', fingerprint };
+}
+
+/**
+ * Report a gate outcome the PO would otherwise never see: an approval that
+ * arrived during an edit window and was refused, or one that only closed some
+ * of the criteria. Without this, the ticket keeps reading "Criteria Approved"
+ * while the service has quietly not honoured it - the PO has no way to know
+ * gate 1 is not actually closed.
+ *
+ * Fingerprinted on the outcome so a repeated reconcile with nothing new to
+ * say writes nothing, the same discipline postCriteria and postDrift follow.
+ */
+export async function postRefusal(
+  client: JiraClient,
+  issueKey: string,
+  outcome: { action: string; detail: string },
+): Promise<WriteOutcome> {
+  const fingerprint = contentHash(`${outcome.action}:${outcome.detail}`);
+
+  const existing = await readProperty(client, issueKey);
+  if (existing?.fingerprint === fingerprint) {
+    return { wrote: false, reason: 'already reported for this outcome', fingerprint };
+  }
+
+  await client.request('POST', `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, {
+    body: textToAdf(`spec2test: ${outcome.detail}`),
+  });
+
+  await writeProperty(client, issueKey, {
+    ...existing,
+    coverage_state: outcome.action,
+    fingerprint,
+    updated_at: new Date().toISOString(),
+  });
+
+  return { wrote: true, reason: `${outcome.action} reported on the ticket`, fingerprint };
 }
 
 export async function readProperty(

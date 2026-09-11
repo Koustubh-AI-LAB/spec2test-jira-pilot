@@ -60,6 +60,8 @@ export async function decide(gate: Gate, input: DecisionInput): Promise<Decision
       );
     }
 
+    const nextState = input.decision === 'approved' ? 'approved' : 'rejected';
+
     const { rows: priorRows } = await client.query(
       `SELECT decision, subject_hash FROM approval
         WHERE subject_type = $1 AND subject_id = $2
@@ -67,15 +69,23 @@ export async function decide(gate: Gate, input: DecisionInput): Promise<Decision
       [type, input.subjectId],
     );
     const prior = priorRows[0];
+    // The prior approval row matching is not enough on its own: drift (or any
+    // other path) can move the subject itself to a different state - stale,
+    // say - while the last APPROVAL row still reads "approved" against the
+    // same hash. Without also checking the subject's current state, a
+    // re-approval after drift reads as "unchanged" and silently does nothing,
+    // leaving the row stuck stale forever with the decision reported as a
+    // no-op rather than applied.
     const unchanged =
-      prior && prior.decision === input.decision && prior.subject_hash === input.seenHash;
+      prior &&
+      prior.decision === input.decision &&
+      prior.subject_hash === input.seenHash &&
+      subject.state === nextState;
 
     if (unchanged) {
       await client.query('COMMIT');
       return { recorded: false, state: subject.state, sameActorBothGates: false };
     }
-
-    const nextState = input.decision === 'approved' ? 'approved' : 'rejected';
     await client.query(
       `UPDATE ${table} SET state = $1, updated_at = now() WHERE id = $2`,
       [nextState, input.subjectId],
