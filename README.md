@@ -39,7 +39,7 @@ docker compose up -d postgres
 cd service
 cp ../.env.example ../.env        # then fill in as needed
 npm run migrate                   # runs as the owner role
-npm test                          # 58 tests, needs the container above
+npm test                          # 58 tests, all passing, needs the container above
                                   # (12 of them are live Jira tests, skipped if
                                   #  JIRA_API_TOKEN is unset - but a token that
                                   #  is SET and dead fails loud, it doesn't skip)
@@ -74,11 +74,11 @@ deleted, and the requirement returns to `draft` - nothing here redrafts on its
 own, since drafting needs an LLM this service never calls; the reason is
 there for the next session to redraft with as context.
 
-**The "Criteria Rejected" option needs adding to the live field's choices** -
-it does not exist on the `S2T` project's `Verification Status` select yet
-(only `Not Started` / `Criteria Drafted` / `Criteria Approved` / `Tests
-Drafted` / `Tests Approved` / `Certified` / `Stale` were provisioned).
-Blocked on a working API token as of this writing; see the open item below.
+Verified live end to end against the real `S2T-1` fixture, not just the
+scripted stand-in: presented, rejected with a genuine PO comment (picked up
+correctly as the reason), requirement returned to `draft`, redrafted through
+the actual route with an added criterion, re-presented, approved - all three
+criteria closed. `Criteria Rejected` is provisioned on the live field.
 
 Two things learned the hard way, both load-bearing:
 
