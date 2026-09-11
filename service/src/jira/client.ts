@@ -128,9 +128,14 @@ export class JiraClient {
 
       const detail = (await res.text()).slice(0, 400);
 
-      // 429 and 5xx are the only retryable classes. A 400/403 will fail the
-      // same way four times and just delays a clear error by two seconds.
-      const retryable = res.status === 429 || res.status >= 500;
+      // 429 is safe to retry on any method: Jira's rate limiter refuses the
+      // request before it is processed, so nothing has happened yet. A 5xx is
+      // different - it can arrive AFTER Jira has already applied a write, so
+      // retrying a non-idempotent POST on one risks creating a second comment
+      // for a request that actually succeeded. GET/PUT/DELETE are safe to
+      // retry either way; POST only gets the 429 case.
+      const idempotent = method === 'GET' || method === 'PUT' || method === 'DELETE';
+      const retryable = res.status === 429 || (res.status >= 500 && idempotent);
       lastError = new JiraError(
         res.status === 429 ? 'jira_rate_limited' : 'jira_request_failed',
         `${method} ${path} -> ${res.status}: ${detail}`,
