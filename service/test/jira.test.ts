@@ -16,7 +16,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { JiraClient, loadConfig } from '../src/jira/client.ts';
-import { fetchTicket, loadFieldMap, VERIFICATION_STATUS } from '../src/jira/read.ts';
+import { fetchTicket, loadFieldMap, validateFieldMap, VERIFICATION_STATUS } from '../src/jira/read.ts';
 import { reconcile } from '../src/jira/reconcile.ts';
 import { postCriteria, readProperty } from '../src/jira/write.ts';
 import { contentHash } from '../src/hash.ts';
@@ -129,6 +129,19 @@ describe('jira client', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
     assert.equal(first.requirementHash, second.requirementHash, 'hash differs between reads');
     assert.equal(first.requirementHash, contentHash(first.requirementText));
     assert.match(first.requirementText, /favourit/i);
+  });
+
+  it('confirms the configured field ids actually exist on this site', async () => {
+    // The failure mode this guards against: a wrong or unset id never errors
+    // on its own, it just reads back undefined forever.
+    await validateFieldMap(client, fields);
+  });
+
+  it('refuses a field id that does not exist, rather than reading it as unset', async () => {
+    await assert.rejects(
+      validateFieldMap(client, { ...fields, verificationStatus: 'customfield_99999999' }),
+      /jira_field_not_found|customfield_99999999/,
+    );
   });
 });
 

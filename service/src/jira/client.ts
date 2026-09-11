@@ -173,6 +173,21 @@ export class JiraClient {
   }
 }
 
+let singleton: JiraClient | undefined;
+
+/**
+ * Module-level singleton, the same pattern as getPool()/getAdminPool() in
+ * db/pool.ts. Each route previously built its own client, and resolveBase()
+ * does a live /myself round trip the first time a client is used - a
+ * reconcile that also reports a refusal was paying for that twice per
+ * request for no reason, since the answer never changes within a process.
+ */
 export function jiraClient(env: NodeJS.ProcessEnv = process.env): JiraClient {
-  return new JiraClient(loadConfig(env));
+  if (!singleton) singleton = new JiraClient(loadConfig(env));
+  return singleton;
+}
+
+/** Test-only: forces the next jiraClient() call to build a fresh instance. */
+export function resetJiraClient(): void {
+  singleton = undefined;
 }
