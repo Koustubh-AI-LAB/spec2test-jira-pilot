@@ -1,0 +1,19 @@
+{
+  "criterionId": "C-BRITTLE-LOGIN-SNAPSHOT",
+  "name": "brittle full-user snapshot on login (deliberately bad, for the Immunity check)",
+  "method": "POST",
+  "path": "/api/users/login",
+  "auth": "none",
+  "body": {
+    "user": {
+      "email": "spec2test_login_fixture@spec2test.dev",
+      "password": "Spec2Test!1"
+    }
+  },
+  "assertions": [
+    {
+      "name": "exact_snapshot",
+      "check": "JSON.stringify((() => { const { token, ...rest } = body.user; return rest; })()) === '{\"email\":\"spec2test_login_fixture@spec2test.dev\",\"username\":\"spec2test_login_fixture\",\"bio\":null,\"image\":\"https://api.realworld.io/images/smiley-cyrus.jpeg\"}'"
+    }
+  ]
+}

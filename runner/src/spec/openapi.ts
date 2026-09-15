@@ -171,3 +171,58 @@ export function missingRequiredBodyFields(
   if (!jsonSchema) return [];
   return missingRequiredFields(schema.raw, jsonSchema, body, '');
 }
+
+function operationFor(schema: OpenApiDoc, method: HttpMethod, requestPath: string): Record<string, unknown> | undefined {
+  const template = matchingTemplate(schema, method, requestPath);
+  if (!template) return undefined;
+  const pathItem = (schema.raw.paths as Record<string, Record<string, unknown>> | undefined)?.[template];
+  return pathItem?.[method.toLowerCase()] as Record<string, unknown> | undefined;
+}
+
+/**
+ * Every status code the schema documents as a possible response for this
+ * operation - used by fault plausibility: a set_status mutation is only
+ * "plausible" if it swaps in a status the operation's own contract actually
+ * lists as possible, not an arbitrary number.
+ */
+export function documentedStatuses(schema: OpenApiDoc, method: HttpMethod, requestPath: string): number[] {
+  const responses = operationFor(schema, method, requestPath)?.responses as Record<string, unknown> | undefined;
+  return Object.keys(responses ?? {})
+    .map((code) => Number(code))
+    .filter((code) => Number.isInteger(code));
+}
+
+function responseJsonSchema(
+  schema: OpenApiDoc,
+  method: HttpMethod,
+  requestPath: string,
+  status: number,
+): Record<string, unknown> | undefined {
+  const responses = operationFor(schema, method, requestPath)?.responses as Record<string, unknown> | undefined;
+  const responseObj = resolve(schema.raw, responses?.[String(status)]);
+  const content = responseObj?.content as Record<string, { schema?: unknown }> | undefined;
+  return resolve(schema.raw, content?.['application/json']?.schema);
+}
+
+/**
+ * True if `path` (leaf segments into the body) is documented anywhere in the
+ * operation's response schema for `status` - used by fault plausibility for
+ * delete_field/set_field: a mutation targeting a field the schema doesn't
+ * even know about isn't a plausible near-miss bug, it's noise. Presence
+ * only, same scoping as missingRequiredBodyFields - not full type checking.
+ */
+export function isFieldInResponseSchema(
+  schema: OpenApiDoc,
+  method: HttpMethod,
+  requestPath: string,
+  status: number,
+  path: string[],
+): boolean {
+  let node = responseJsonSchema(schema, method, requestPath, status);
+  for (const segment of path) {
+    if (!node) return false;
+    const properties = node.properties as Record<string, unknown> | undefined;
+    node = resolve(schema.raw, properties?.[segment]);
+  }
+  return node !== undefined;
+}

@@ -35,25 +35,24 @@ export function checkAst(source: string, fileName: string, spec: TestCaseSpec): 
     });
   }
 
-  // Every "// assertion: <name>" leading comment must be immediately
-  // followed, in the same statement, by an expect(...) call. Walks every
-  // ExpressionStatement anywhere in the tree - assertions live nested inside
-  // the test()'s arrow-function body, not at the top level of the file.
+  // Every assertion is a `test.step('assertion: <name>', async () => {...})`
+  // call - the step's own name string is the single source of truth for
+  // "which assertion is this" (readable statically here, and reportable at
+  // runtime by Playwright's own JSON reporter - the mechanism step 4's
+  // fault-injection attribution depends on). A leading comment was step 3's
+  // original design; it couldn't carry runtime attribution, so it's gone.
   const declaredNames = new Set<string>();
-  const fullText = sourceFile.getFullText();
   const visitForAssertions = (node: ts.Node): void => {
-    if (ts.isExpressionStatement(node)) {
-      const ranges = ts.getLeadingCommentRanges(fullText, node.getFullStart()) ?? [];
-      for (const range of ranges) {
-        const commentText = fullText.slice(range.pos, range.end);
-        const match = /\/\/\s*assertion:\s*(.+)/.exec(commentText);
-        if (!match) continue;
+    const step = matchTestStepCall(node);
+    if (step) {
+      const match = /^assertion:\s*(.+)$/.exec(step.title);
+      if (match) {
         const name = match[1]!.trim();
         declaredNames.add(name);
-        if (!statementCallsExpect(node)) {
+        if (!callbackCallsExpect(step.callback)) {
           failures.push({
             rule: 'assertion_present',
-            message: `assertion "${name}" has a comment but no expect(...) call follows it`,
+            message: `test.step("${step.title}", ...) has no expect(...) call in its callback`,
           });
         }
       }
@@ -66,7 +65,7 @@ export function checkAst(source: string, fileName: string, spec: TestCaseSpec): 
     if (!declaredNames.has(assertion.name)) {
       failures.push({
         rule: 'assertion_present',
-        message: `spec declares assertion "${assertion.name}" but no matching "// assertion: ${assertion.name}" comment was found in the generated file`,
+        message: `spec declares assertion "${assertion.name}" but no matching test.step("assertion: ${assertion.name}", ...) was found in the generated file`,
       });
     }
   }
@@ -74,18 +73,44 @@ export function checkAst(source: string, fileName: string, spec: TestCaseSpec): 
   return failures;
 }
 
-function statementCallsExpect(node: ts.Node): boolean {
-  if (
-    ts.isExpressionStatement(node) &&
-    ts.isCallExpression(node.expression)
-  ) {
-    const callee = node.expression.expression;
-    // expect(x).toBeTruthy() -> callee is a PropertyAccessExpression whose
-    // expression is a CallExpression to `expect`.
-    if (ts.isPropertyAccessExpression(callee) && ts.isCallExpression(callee.expression)) {
-      const inner = callee.expression.expression;
-      return ts.isIdentifier(inner) && inner.text === 'expect';
+/** Matches `test.step('<title>', <callback>)` (with or without a leading
+ *  `await`) and returns the title text and the callback body, or undefined
+ *  if `node` isn't that shape. */
+function matchTestStepCall(node: ts.Node): { title: string; callback: ts.Node } | undefined {
+  const expr = ts.isExpressionStatement(node)
+    ? (ts.isAwaitExpression(node.expression) ? node.expression.expression : node.expression)
+    : undefined;
+  if (!expr || !ts.isCallExpression(expr)) return undefined;
+
+  const callee = expr.expression;
+  const isTestStep =
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === 'test' &&
+    callee.name.text === 'step';
+  if (!isTestStep) return undefined;
+
+  const [titleArg, callbackArg] = expr.arguments;
+  if (!titleArg || !ts.isStringLiteral(titleArg) || !callbackArg) return undefined;
+  return { title: titleArg.text, callback: callbackArg };
+}
+
+/** True if an expect(...).method(...) call appears anywhere inside `node`. */
+function callbackCallsExpect(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isCallExpression(n.expression.expression) &&
+      ts.isIdentifier(n.expression.expression.expression) &&
+      n.expression.expression.expression.text === 'expect'
+    ) {
+      found = true;
+      return;
     }
-  }
-  return false;
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
 }
