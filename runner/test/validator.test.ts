@@ -144,14 +144,34 @@ describe('AST checks', () => {
       "export const criterionId = 'C-REGISTER-USER';",
       "test('x', async () => {",
       '  const { status } = await apiClient.request();',
-      '  // assertion: status_201',
-      '  expect(status === 201).toBeTruthy();',
+      "  await test.step('assertion: status_201', async () => {",
+      '    expect(status === 201).toBeTruthy();',
+      '  });',
       '  // has_token is declared in the spec but never checked here',
       '});',
       '',
     ].join('\n');
     const failures = checkAst(source, 'x.spec.ts', wellFormedSpec);
     assert.ok(failures.some((f) => f.rule === 'assertion_present' && /has_token/.test(f.message)));
+  });
+
+  it('rejects a test.step whose callback has no expect(...) call at all', () => {
+    const source = [
+      "export const criterionId = 'C-REGISTER-USER';",
+      "test('x', async () => {",
+      "  await test.step('assertion: status_201', async () => {",
+      '    console.log(status);', // no expect() here
+      '  });',
+      "  await test.step('assertion: has_token', async () => {",
+      '    expect(body.user.token).toBeTruthy();',
+      '  });',
+      '});',
+      '',
+    ].join('\n');
+    const failures = checkAst(source, 'x.spec.ts', wellFormedSpec);
+    assert.ok(
+      failures.some((f) => f.rule === 'assertion_present' && /status_201.*no expect/.test(f.message)),
+    );
   });
 
   it('accepts a well-formed generated file', () => {

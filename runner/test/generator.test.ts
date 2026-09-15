@@ -38,11 +38,17 @@ describe('generator determinism', () => {
     assert.doesNotMatch(source, /spec2test_\{\{unique\}\}/);
   });
 
-  it('emits an exported criterionId literal and one commented assertion per declared check', () => {
+  it('emits an exported criterionId literal and one named test.step per declared check', () => {
     const source = render(registerSpec);
     assert.match(source, /export const criterionId = "C-REGISTER-USER";/);
-    assert.match(source, /\/\/ assertion: status_201\s*\n\s*expect\(status === 201\)\.toBeTruthy\(\);/);
-    assert.match(source, /\/\/ assertion: has_token\s*\n\s*expect\(body\.user\.token\)\.toBeTruthy\(\);/);
+    assert.match(
+      source,
+      /await test\.step\("assertion: status_201", async \(\) => \{\s*\n\s*expect\(status === 201\)\.toBeTruthy\(\);\s*\n\s*\}\);/,
+    );
+    assert.match(
+      source,
+      /await test\.step\("assertion: has_token", async \(\) => \{\s*\n\s*expect\(body\.user\.token\)\.toBeTruthy\(\);\s*\n\s*\}\);/,
+    );
   });
 
   it('imports only @playwright/test and the relative client wrapper', () => {

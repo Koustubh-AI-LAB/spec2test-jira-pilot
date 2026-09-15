@@ -74,8 +74,10 @@ export function render(spec: TestCaseSpec): string {
   lines.push('');
 
   for (const assertion of spec.assertions) {
-    lines.push(`  // assertion: ${assertion.name}`);
-    lines.push(`  expect(${assertion.check}).toBeTruthy();`);
+    const stepName = `assertion: ${assertion.name}`;
+    lines.push(`  await test.step(${JSON.stringify(stepName)}, async () => {`);
+    lines.push(`    expect(${assertion.check}).toBeTruthy();`);
+    lines.push('  });');
   }
 
   lines.push('});');
