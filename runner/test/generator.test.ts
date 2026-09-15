@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { render, kebabCase } from '../src/generator/render.ts';
 import { generate } from '../src/generator/index.ts';
 import type { TestCaseSpec } from '../src/spec/types.ts';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -91,6 +91,52 @@ describe('generate()', () => {
       } finally {
         rmSync(dir2, { recursive: true, force: true });
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-generating the same unchanged spec into the same directory is a silent no-op, not a refusal', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spec2test-runner-'));
+    try {
+      generate(registerSpec, dir);
+      assert.doesNotThrow(() => generate(registerSpec, dir));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to clobber a hand-edited file - the mechanism gate-2 approval will eventually rely on', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spec2test-runner-'));
+    try {
+      const { filePath } = generate(registerSpec, dir);
+      writeFileSync(filePath, readFileSync(filePath, 'utf8') + '\n// hand-edited\n', 'utf8');
+
+      assert.throws(() => generate(registerSpec, dir), /already exists with different content/);
+
+      // force: true is the deliberate escape hatch.
+      const forced = generate(registerSpec, dir, { force: true });
+      assert.equal(readFileSync(filePath, 'utf8'), forced.source);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when two different specs kebab-case to the same filename, instead of silently overwriting one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spec2test-runner-'));
+    try {
+      const collidingSpec: TestCaseSpec = {
+        ...registerSpec,
+        criterionId: 'C-SOMETHING-ELSE',
+        // Same rendered filename ("register-a-new-user.spec.ts") as registerSpec,
+        // different content - the case a bare filename check would miss.
+        name: 'Register A New User',
+        method: 'GET',
+      };
+      assert.equal(kebabCase(collidingSpec.name), kebabCase(registerSpec.name));
+
+      generate(registerSpec, dir);
+      assert.throws(() => generate(collidingSpec, dir), /already exists with different content/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

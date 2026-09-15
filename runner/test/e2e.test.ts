@@ -32,7 +32,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURES = join(HERE, '..', 'fixtures');
 const STATE_SERVICE = process.env.STATE_SERVICE_URL ?? 'http://localhost:8787';
 
-const FIXTURE_NAMES = ['register-user', 'login-user', 'create-article'] as const;
+const FIXTURE_NAMES = ['register-user', 'login-user', 'create-article', 'login-wrong-password'] as const;
 
 async function registerEnvironment(targetRepoPath: string, baseUrl: string, openapiPath: string): Promise<void> {
   const projectRes = await fetch(`${STATE_SERVICE}/projects`, {
