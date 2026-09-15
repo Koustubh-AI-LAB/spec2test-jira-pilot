@@ -1,0 +1,18 @@
+{
+  "criterionId": "C-REGISTER-USER",
+  "name": "register a new user",
+  "method": "POST",
+  "path": "/api/users",
+  "auth": "none",
+  "body": {
+    "user": {
+      "username": "spec2test_{{unique}}",
+      "email": "spec2test_{{unique}}@spec2test.dev",
+      "password": "Spec2Test!1"
+    }
+  },
+  "assertions": [
+    { "name": "status_201", "check": "status === 201" },
+    { "name": "has_token", "check": "body.user.token" }
+  ]
+}

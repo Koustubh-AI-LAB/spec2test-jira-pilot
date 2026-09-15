@@ -1,0 +1,15 @@
+{
+  "POST /api/users": {
+    "status": 201,
+    "body": {
+      "user": {
+        "id": 999,
+        "email": "spec2test_fixture@spec2test.dev",
+        "username": "spec2test_fixture",
+        "bio": null,
+        "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+        "token": "replay-fixture-token"
+      }
+    }
+  }
+}

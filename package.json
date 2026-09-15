@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "Jira to Claude Code QA pipeline: requirement in, proven test out, status back on the ticket.",
   "workspaces": [
-    "service"
+    "service",
+    "runner"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",

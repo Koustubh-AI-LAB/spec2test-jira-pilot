@@ -1,0 +1,18 @@
+{
+  "criterionId": "C-LOGIN-USER",
+  "name": "log in with a known fixture account",
+  "method": "POST",
+  "path": "/api/users/login",
+  "auth": "none",
+  "body": {
+    "user": {
+      "email": "spec2test_login_fixture@spec2test.dev",
+      "password": "Spec2Test!1"
+    }
+  },
+  "assertions": [
+    { "name": "status_200", "check": "status === 200" },
+    { "name": "has_token", "check": "body.user.token" },
+    { "name": "correct_email", "check": "body.user.email === 'spec2test_login_fixture@spec2test.dev'" }
+  ]
+}
