@@ -2,3 +2,8 @@ node_modules/
 dist/
 .env
 *.log
+
+# Scratch target-repo scaffolds for runner's offline typecheck tests - built
+# inside runner/ on purpose, so @playwright/test resolves via its real
+# node_modules instead of a system tmpdir with none of its own.
+runner/.tmp-test/

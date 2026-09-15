@@ -1,0 +1,15 @@
+{
+  "POST /api/users/login": {
+    "status": 200,
+    "body": {
+      "user": {
+        "id": 2,
+        "email": "spec2test_login_fixture@spec2test.dev",
+        "username": "spec2test_login_fixture",
+        "bio": null,
+        "image": null,
+        "token": "replay-fixture-token"
+      }
+    }
+  }
+}

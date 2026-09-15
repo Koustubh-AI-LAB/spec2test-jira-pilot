@@ -1,0 +1,19 @@
+{
+  "name": "@spec2test/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
+    "init": "node --experimental-strip-types src/cli.ts init"
+  },
+  "dependencies": {
+    "typescript": "^5.7.3",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@playwright/test": "^1.63.0"
+  }
+}
