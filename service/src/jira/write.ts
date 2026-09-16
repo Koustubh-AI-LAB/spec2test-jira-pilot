@@ -355,6 +355,175 @@ export async function postRefusal(
   return { wrote: true, reason: `${outcome.action} reported on the ticket`, fingerprint };
 }
 
+export interface VerificationCriterionView {
+  id: string;
+  body: string;
+  stateAffecting: boolean;
+  covered: boolean;
+}
+
+export interface PostVerificationInput {
+  issueKey: string;
+  requirementHash: string;
+  state: 'awaiting_test_approval' | 'verifying' | 'contract_verified' | 'weak' | 'failing';
+  criteria: VerificationCriterionView[];
+}
+
+/**
+ * Maps the requirement-level rollup (service/src/verification.ts) onto the
+ * PO-facing field. `Certified` is never a value this can produce - see the
+ * comment on VERIFICATION_STATUS in read.ts. `awaiting_test_approval` and
+ * `verifying` are collapsed onto the closest existing field values
+ * (`Tests Drafted` / `Tests Approved`) rather than adding new ones - the
+ * finer-grained distinction the DB enum makes isn't PO-relevant yet, and
+ * keeping the live field's option list small is deliberate for this step.
+ */
+function verificationStatusValue(state: PostVerificationInput['state']): string {
+  switch (state) {
+    case 'awaiting_test_approval':
+      return VERIFICATION_STATUS.testsDrafted;
+    case 'verifying':
+      return VERIFICATION_STATUS.testsApproved;
+    case 'contract_verified':
+      return VERIFICATION_STATUS.contractVerified;
+    case 'weak':
+      return VERIFICATION_STATUS.weak;
+    case 'failing':
+      return VERIFICATION_STATUS.failing;
+  }
+}
+
+function verificationFingerprint(input: PostVerificationInput): string {
+  const payload = JSON.stringify({
+    state: input.state,
+    requirementHash: input.requirementHash,
+    criteria: input.criteria
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((c) => [c.id, c.covered, c.stateAffecting]),
+  });
+  return contentHash(payload);
+}
+
+function verificationComment(input: PostVerificationInput, browseUrl: string, fingerprint: string): AdfNode {
+  const certifiedCount = input.criteria.filter((c) => c.covered).length;
+
+  const heading = {
+    type: 'paragraph',
+    content: [
+      {
+        type: 'text',
+        text: `spec2test verification: ${verificationStatusValue(input.state)} (${certifiedCount}/${input.criteria.length} criteria).`,
+        marks: [{ type: 'strong' }],
+      },
+    ],
+  };
+
+  const list = {
+    type: 'bulletList',
+    content: input.criteria.map((c) => ({
+      type: 'listItem',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: `${c.covered ? '✓' : '✗'} ${c.body}` },
+            ...(c.stateAffecting
+              ? [
+                  {
+                    type: 'text',
+                    text:
+                      '  [state-affecting: this test’s assertions are proven sound; the app’s ' +
+                      'own enforcement of this rule is not yet proven - tier-1 evidence only]',
+                    marks: [{ type: 'em' }],
+                  },
+                ]
+              : []),
+          ],
+        },
+      ],
+    })),
+  };
+
+  const footer = {
+    type: 'paragraph',
+    content: [
+      { type: 'text', text: `requirement ${input.requirementHash.slice(0, 12)} - ${browseUrl}`, marks: [{ type: 'em' }] },
+    ],
+  };
+
+  const marker = {
+    type: 'paragraph',
+    content: [{ type: 'text', text: `${MARKER_PREFIX}${fingerprint}` }],
+  };
+
+  return { type: 'doc', version: 1, content: [heading, list, footer, marker] } as AdfNode;
+}
+
+/**
+ * Push the verification rollup (state + per-criterion coverage) onto the
+ * ticket. Same idempotency discipline as postCriteria: fingerprinted, a
+ * repeated call with nothing new to say writes nothing.
+ */
+export async function postVerification(
+  client: JiraClient,
+  input: PostVerificationInput,
+  options: { fields?: FieldMap } = {},
+): Promise<WriteOutcome> {
+  const fields = options.fields ?? loadFieldMap();
+  const fingerprint = verificationFingerprint(input);
+
+  const existing = await readProperty(client, input.issueKey);
+  if (existing?.fingerprint === fingerprint) {
+    return { wrote: false, reason: 'verification unchanged since the last write', fingerprint };
+  }
+
+  const certifiedCount = input.criteria.filter((c) => c.covered).length;
+  const now = new Date().toISOString();
+
+  await client.request('PUT', `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}`, {
+    fields: {
+      [fields.verificationStatus]: { value: verificationStatusValue(input.state) },
+      [fields.criteriaCertified]: certifiedCount,
+      [fields.criteriaTotal]: input.criteria.length,
+      [fields.lastVerified]: now,
+    },
+  });
+
+  const already = await findPostedComment(client, input.issueKey, fingerprint);
+  const comment =
+    already ??
+    (await client.request<{ id: string; created?: string }>(
+      'POST',
+      `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`,
+      { body: verificationComment(input, client.browseUrl(input.issueKey), fingerprint) },
+    ));
+  const postedAt = comment.created ?? now;
+
+  await writeProperty(client, input.issueKey, {
+    ...existing,
+    coverage_state: input.state,
+    fingerprint,
+    requirement_hash: input.requirementHash,
+    updated_at: postedAt,
+  });
+
+  await audit({
+    event: 'jira_verification_posted',
+    subject: `issue:${input.issueKey}`,
+    actor: 'system',
+    detail: { issue_key: input.issueKey, state: input.state, certified: certifiedCount, total: input.criteria.length, fingerprint },
+  });
+
+  return {
+    wrote: true,
+    reason: already
+      ? 'recovered from an incomplete previous write - comment already existed, property record completed'
+      : `posted verification: ${verificationStatusValue(input.state)}`,
+    fingerprint,
+  };
+}
+
 export async function readProperty(
   client: JiraClient,
   issueKey: string,

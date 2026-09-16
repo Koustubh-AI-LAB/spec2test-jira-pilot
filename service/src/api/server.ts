@@ -10,8 +10,10 @@ import { EnvironmentNotAllowedError, ServiceError } from '../errors.ts';
 import { jiraClient } from '../jira/client.ts';
 import { reconcile } from '../jira/reconcile.ts';
 import { loadFieldMap, validateFieldMap } from '../jira/read.ts';
-import { postCriteria, postDrift, postRefusal } from '../jira/write.ts';
+import { postCriteria, postDrift, postRefusal, postVerification } from '../jira/write.ts';
 import type { CriterionView } from '../jira/write.ts';
+import { runOnce } from '../worker/index.ts';
+import { computeVerification } from '../verification.ts';
 
 /**
  * Bumped whenever the plugin-facing contract changes. The skill checks this at
@@ -289,6 +291,23 @@ export function buildServer(): FastifyInstance {
       spec: unknown;
     } & Partial<Provenance>;
     const p = requireProvenance(b);
+
+    // Defense in depth: a test case must never be drafted against a
+    // criterion gate 1 hasn't actually closed on - found while wiring step
+    // 5, this route previously accepted one against any criterion state.
+    const { rows: criterionRows } = await pool.query<{ state: string }>(
+      'SELECT state FROM criterion WHERE id = $1',
+      [b.criterion_id],
+    );
+    if (!criterionRows[0]) throw new ServiceError('not_found', `criterion ${b.criterion_id} not found`, 404);
+    if (criterionRows[0].state !== 'approved') {
+      throw new ServiceError(
+        'criterion_not_approved',
+        `criterion ${b.criterion_id} is "${criterionRows[0].state}", not "approved" - gate 1 must close on ` +
+          'this criterion before a test case can be drafted against it',
+      );
+    }
+
     const serialised = JSON.stringify(b.spec);
     const { rows } = await pool.query(
       `INSERT INTO test_case
@@ -314,7 +333,7 @@ export function buildServer(): FastifyInstance {
         reason?: string;
         seen_hash: string;
       };
-      return decide(gate, {
+      const outcome = await decide(gate, {
         subjectId: b.subject_id,
         decision: b.decision,
         actor: b.actor,
@@ -322,8 +341,92 @@ export function buildServer(): FastifyInstance {
         reason: b.reason,
         seenHash: b.seen_hash,
       });
+
+      // Gate 2 rejection: if this test case's criterion now has zero
+      // non-rejected test cases, it's Uncovered - information the PO's
+      // dashboard should show, not a gap that silently vanishes. A redraft
+      // needs no new endpoint: the skill just POSTs a new test case against
+      // the same criterion; the old rejected row stays for audit history,
+      // same as a rejected criterion is never deleted.
+      let requirementId: string | undefined;
+      if (gate === 2) {
+        const { rows } = await pool.query<{ criterion_id: string; requirement_id: string }>(
+          `SELECT tc.criterion_id, c.requirement_id
+             FROM test_case tc JOIN criterion c ON c.id = tc.criterion_id
+            WHERE tc.id = $1`,
+          [b.subject_id],
+        );
+        const row = rows[0];
+        if (row) {
+          requirementId = row.requirement_id;
+          if (b.decision === 'rejected') {
+            const { rows: remaining } = await pool.query(
+              `SELECT 1 FROM test_case WHERE criterion_id = $1 AND state <> 'rejected' LIMIT 1`,
+              [row.criterion_id],
+            );
+            if (remaining.length === 0) {
+              await pool.query(`UPDATE criterion SET state = 'uncovered', updated_at = now() WHERE id = $1`, [
+                row.criterion_id,
+              ]);
+            }
+          }
+        }
+      } else if (outcome.recorded) {
+        const { rows } = await pool.query<{ requirement_id: string }>(
+          'SELECT requirement_id FROM criterion WHERE id = $1',
+          [b.subject_id],
+        );
+        requirementId = rows[0]?.requirement_id;
+      }
+      if (requirementId) await computeVerification(requirementId);
+
+      return outcome;
     });
   }
+
+  /**
+   * Codegen -> validate -> falsify for one approved test case, all
+   * server-side via the runner CLI subprocess (see worker/runnerCli.ts).
+   * Synchronous for this step - see the master plan's step 5 notes: the
+   * `job` row is real and the code path is the one a future background
+   * poller would use, only "return immediately" is deferred.
+   */
+  app.post('/test-cases/:id/verify', async (req) => {
+    const { id } = req.params as { id: string };
+    const b = req.body as { environment_id: string };
+    if (!b.environment_id) {
+      throw new ServiceError('environment_id_required', 'environment_id is required - resolve it via GET /environments/resolve first');
+    }
+
+    const { rows } = await pool.query<{ state: string; criterion_id: string }>(
+      'SELECT state, criterion_id FROM test_case WHERE id = $1',
+      [id],
+    );
+    const testCase = rows[0];
+    if (!testCase) throw new ServiceError('not_found', `test case ${id} not found`, 404);
+    if (testCase.state !== 'approved') {
+      throw new ServiceError(
+        'test_case_not_approved',
+        `test case ${id} is "${testCase.state}", not "approved" - gate 2 must have closed before it can be verified`,
+      );
+    }
+
+    const { rows: reqRows } = await pool.query<{ requirement_id: string }>(
+      'SELECT requirement_id FROM criterion WHERE id = $1',
+      [testCase.criterion_id],
+    );
+    const requirementId = reqRows[0]?.requirement_id;
+    if (!requirementId) throw new ServiceError('not_found', `criterion ${testCase.criterion_id} not found`, 404);
+
+    const { rows: jobRows } = await pool.query<{ id: string }>(
+      `INSERT INTO job (kind, requirement_id, payload)
+       VALUES ('falsification', $1, $2)
+       RETURNING id`,
+      [requirementId, JSON.stringify({ testCaseId: id, environmentId: b.environment_id })],
+    );
+
+    return runOnce(jobRows[0]!.id);
+  });
 
   // --- Jira -------------------------------------------------------------
   // The service owns all Jira I/O. Nothing is reachable *from* Jira: every
@@ -401,6 +504,50 @@ export function buildServer(): FastifyInstance {
       { force: body.force },
     );
     return outcome;
+  });
+
+  /**
+   * Push the verification rollup onto the ticket. The master plan's "ask
+   * before syncing" convention is enforced by the skill, which confirms
+   * with the developer before ever calling this - not by the route itself.
+   */
+  app.post('/jira/:issueKey/verification', async (req) => {
+    const { issueKey } = req.params as { issueKey: string };
+    const body = req.body as { requirement_id: string };
+
+    const verification = await computeVerification(body.requirement_id);
+    if (verification.state === 'unchanged' || verification.criteria.length === 0) {
+      throw new ServiceError(
+        'nothing_to_verify',
+        `requirement ${body.requirement_id} has nothing to report yet - gate 1 must close first`,
+      );
+    }
+
+    const { rows } = await pool.query<{ source_text_hash: string }>(
+      'SELECT source_text_hash FROM requirement WHERE id = $1',
+      [body.requirement_id],
+    );
+    const requirementHash = rows[0]?.source_text_hash;
+    if (!requirementHash) throw new ServiceError('not_found', `requirement ${body.requirement_id} not found`, 404);
+
+    const { rows: criterionRows } = await pool.query<{ id: string; body: string }>(
+      `SELECT id, body FROM criterion WHERE requirement_id = $1`,
+      [body.requirement_id],
+    );
+    const bodyById = new Map(criterionRows.map((c) => [c.id, c.body]));
+
+    const outcome = await postVerification(jiraClient(), {
+      issueKey,
+      requirementHash,
+      state: verification.state,
+      criteria: verification.criteria.map((c) => ({
+        id: c.id,
+        body: bodyById.get(c.id) ?? '',
+        stateAffecting: c.stateAffecting,
+        covered: c.covered,
+      })),
+    });
+    return { verification, jira: outcome };
   });
 
   app.get('/audit', async (req) => {

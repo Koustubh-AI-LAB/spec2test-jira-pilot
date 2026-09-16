@@ -66,7 +66,18 @@ export async function validateFieldMap(client: JiraClient, fields: FieldMap): Pr
   }
 }
 
-/** The PO's Gate 1 signal. */
+/**
+ * The PO's Gate 1 signal, and (from `contractVerified` on) the PO-facing
+ * rollup written by postVerification. `certified: 'Certified'` never
+ * appears here on purpose - master plan gap #10: tier-1-only evidence proves
+ * assertion soundness, not that the app enforces the rule, so this phase is
+ * only ever honest calling it `Contract-Verified`. `Certified` is reserved
+ * for tier-2 evidence and therefore unreachable until then.
+ *
+ * `Contract-Verified`, `Weak` and `Failing` need to be added as select
+ * options on the live `Verification Status` custom field before a live run
+ * writes them - same manual step as `Criteria Rejected` (see README).
+ */
 export const VERIFICATION_STATUS = {
   notStarted: 'Not Started',
   criteriaDrafted: 'Criteria Drafted',
@@ -74,7 +85,9 @@ export const VERIFICATION_STATUS = {
   criteriaRejected: 'Criteria Rejected',
   testsDrafted: 'Tests Drafted',
   testsApproved: 'Tests Approved',
-  certified: 'Certified',
+  contractVerified: 'Contract-Verified',
+  weak: 'Weak',
+  failing: 'Failing',
   stale: 'Stale',
 } as const;
 
