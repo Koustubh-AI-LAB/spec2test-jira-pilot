@@ -4,11 +4,14 @@ A requirement leaves Jira, becomes a test that is proven to actually catch the
 bug it claims to, and the result lands back on the ticket. The developer stays
 in their IDE; the product owner stays in Jira.
 
-**Status: build step 2 of 8, hardened.** The State Service exists and its gate
-logic is proven; Jira read-back and write-back are live, with the PO's
+**Status: build steps 1-4 of 8 done, step 5 in progress.** The State Service and
+its gate logic are proven; Jira read-back and write-back are live, with the PO's
 approval or rejection in Jira closing or reopening Gate 1, no webhook, and a
-real redraft path for a requirement that drifted or was rejected. There is no
-drafting, no codegen and no fault injection yet.
+real redraft path. Codegen, a five-stage validator and tier-1 fault injection
+(Kill Set / Immunity Set) are all proven live against a self-hosted Conduit.
+There is no LLM in the loop yet and no Claude Code plugin — that is step 5, and
+the walking skeleton completes there. See `EXECUTION-PLAN.md` for the full
+record and the forward plan.
 
 ## Why a service and not just a Claude Code skill
 
