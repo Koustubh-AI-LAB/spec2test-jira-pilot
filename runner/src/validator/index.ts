@@ -4,6 +4,7 @@ import { checkAst } from './astChecks.ts';
 import { typecheckFile } from './typecheck.ts';
 import { replay } from './replay.ts';
 import { smoke } from './smoke.ts';
+import type { PlaywrightStepResult } from './runPlaywright.ts';
 
 export type ValidationStage = 'import_whitelist' | 'ast_checks' | 'typecheck' | 'replay' | 'smoke';
 
@@ -11,6 +12,10 @@ export interface ValidationStageResult {
   stage: ValidationStage;
   ok: boolean;
   details: string[];
+  /** Only present on the smoke stage - per-assertion attribution from the
+   *  JSON reporter, for a caller (the service's worker) that wants to write
+   *  one row per assertion rather than one coarse pass/fail for the run. */
+  steps?: PlaywrightStepResult[];
 }
 
 export interface ValidationReport {
@@ -78,6 +83,7 @@ export function validate(opts: ValidateOptions): ValidationReport {
       stage: 'smoke',
       ok: smokeResult.passed,
       details: smokeResult.passed ? [] : [smokeResult.output],
+      steps: smokeResult.steps,
     });
     if (!stages.at(-1)!.ok) return { ok: false, stages };
   }
