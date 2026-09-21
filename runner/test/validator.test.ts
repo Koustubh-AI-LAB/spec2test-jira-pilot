@@ -155,6 +155,68 @@ describe('AST checks', () => {
     assert.ok(failures.some((f) => f.rule === 'assertion_present' && /has_token/.test(f.message)));
   });
 
+  it('rejects a file where no request is marked subject: true - the fault seam would be silently dead', () => {
+    const source = [
+      "export const criterionId = 'C-REGISTER-USER';",
+      "test('x', async () => {",
+      '  const { status, body } = await apiClient.request("POST", "/api/users", { auth: "none" });',
+      "  await test.step('assertion: status_201', async () => {",
+      '    expect(status === 201).toBeTruthy();',
+      '  });',
+      "  await test.step('assertion: has_token', async () => {",
+      '    expect(body.user.token).toBeTruthy();',
+      '  });',
+      '});',
+      '',
+    ].join('\n');
+    const failures = checkAst(source, 'x.spec.ts', wellFormedSpec);
+    assert.ok(
+      failures.some((f) => f.rule === 'subject_request_marked' && /INCONCLUSIVE/.test(f.message)),
+      'an unmarked file must be rejected: every fault would apply to nothing and score INCONCLUSIVE',
+    );
+  });
+
+  it('rejects a file marking more than one request as the subject - an ambiguous fault target', () => {
+    const source = [
+      "export const criterionId = 'C-REGISTER-USER';",
+      "test('x', async () => {",
+      '  await apiClient.request("POST", "/api/users", { auth: "none", subject: true });',
+      '  const { status, body } = await apiClient.request("POST", "/api/users", { auth: "none", subject: true });',
+      "  await test.step('assertion: status_201', async () => {",
+      '    expect(status === 201).toBeTruthy();',
+      '  });',
+      "  await test.step('assertion: has_token', async () => {",
+      '    expect(body.user.token).toBeTruthy();',
+      '  });',
+      '});',
+      '',
+    ].join('\n');
+    const failures = checkAst(source, 'x.spec.ts', wellFormedSpec);
+    assert.ok(failures.some((f) => f.rule === 'subject_request_marked' && /^2 /.test(f.message)));
+  });
+
+  it('accepts a chained file where only the final request is the subject', () => {
+    const source = [
+      "export const criterionId = 'C-REGISTER-USER';",
+      "test('x', async () => {",
+      '  {',
+      '    const { status } = await apiClient.request("POST", "/api/users", { auth: "none" });',
+      '    expect(status, "setup failed").toBeLessThan(400);',
+      '  }',
+      '  const { status, body } = await apiClient.request("PUT", "/api/articles/x", { auth: "user", subject: true });',
+      "  await test.step('assertion: status_201', async () => {",
+      '    expect(status === 201).toBeTruthy();',
+      '  });',
+      "  await test.step('assertion: has_token', async () => {",
+      '    expect(body.user.token).toBeTruthy();',
+      '  });',
+      '});',
+      '',
+    ].join('\n');
+    const failures = checkAst(source, 'x.spec.ts', wellFormedSpec);
+    assert.deepEqual(failures, []);
+  });
+
   it('rejects a test.step whose callback has no expect(...) call at all', () => {
     const source = [
       "export const criterionId = 'C-REGISTER-USER';",

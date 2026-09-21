@@ -57,6 +57,7 @@ const TEST_ENV_KEYS = [
   'SPEC2TEST_FAULT',
   'SPEC2TEST_FAULT_RESULT',
   'SPEC2TEST_CAPTURE',
+  'SPEC2TEST_TRANSCRIPT_CAPTURE',
 ];
 
 /** Exported for direct testing - the actual guarantee ("secrets never reach

@@ -32,12 +32,20 @@ export interface ApiResponse {
 export interface RequestOptions {
   body?: unknown;
   auth: AuthMode;
+  /** Overrides TARGET_AUTH_TOKEN for this one request - how a chained test
+   *  acts as a second user (e.g. "only the author may edit this article"),
+   *  which one static token cannot express. */
+  authToken?: string;
+  /** True for the request the assertions are about. A chained test makes
+   *  several requests; only this one is sampled for immunity-fault derivation
+   *  and only this one ever has a fault injected into it. */
+  subject?: boolean;
 }
 
 export type Transport = (
   method: HttpMethod,
   url: string,
-  init: { body?: unknown; headers: Record<string, string> },
+  init: { body?: unknown; headers: Record<string, string>; subject?: boolean },
 ) => Promise<ApiResponse>;
 
 const liveTransport: Transport = async (method, url, init) => {
@@ -137,20 +145,24 @@ function writeFaultResult(applied: boolean): void {
 /**
  * SPEC2TEST_FAULT points at a JSON file {method, path, mutation}. The real
  * request is always made - falsification needs a genuine response to mutate,
- * not a fabricated one - and the mutation is applied only if method+path
- * match. Whether it actually changed anything is written to
+ * not a fabricated one - and the mutation is applied only to the SUBJECT
+ * request. Whether it actually changed anything is written to
  * SPEC2TEST_FAULT_RESULT, a side channel the generated test never reads;
  * runFalsification reads it to tell "the assertion survived a real fault"
  * apart from "the fault never fired."
+ *
+ * Targeting is by the subject flag, not by method+path: a chained test can
+ * legitimately repeat a route in setup (registering two users before testing
+ * that one of them cannot edit the other's article is exactly that shape),
+ * and matching on method+path would fire the fault on the first registration
+ * instead of the request under test. The fault file still carries method and
+ * path, but only so a report says what was targeted.
  */
 function faultTransport(faultPath: string): Transport {
   const fault = JSON.parse(readFileSync(faultPath, 'utf8')) as FaultFile;
   return async (method, url, init) => {
     const real = await liveTransport(method, url, init);
-    if (method !== fault.method || new URL(url).pathname !== fault.path) {
-      writeFaultResult(false);
-      return real;
-    }
+    if (!init.subject) return real;
     const { response, applied } = applyMutation(real, fault.mutation);
     writeFaultResult(applied);
     return response;
@@ -166,10 +178,43 @@ function faultTransport(faultPath: string): Transport {
  * Wraps whichever base transport is already selected, so it composes rather
  * than being a fourth exclusive mode.
  */
-function withCapture(base: Transport, capturePath: string): Transport {
+export function withCapture(base: Transport, capturePath: string): Transport {
   return async (method, url, init) => {
     const result = await base(method, url, init);
-    writeFileSync(capturePath, JSON.stringify(result), 'utf8');
+    // Subject only: a chained test's setup responses are not what immunity
+    // faults are derived from, and letting the last write win would sample
+    // whichever request happened to run last.
+    if (init.subject) writeFileSync(capturePath, JSON.stringify(result), 'utf8');
+    return result;
+  };
+}
+
+/**
+ * SPEC2TEST_TRANSCRIPT_CAPTURE points at a path to build a complete replay
+ * transcript at: EVERY request in the run is recorded, keyed exactly the way
+ * transcriptTransport looks entries up - "METHOD <resolved pathname>". A
+ * chained test makes several requests and replay needs an entry for each,
+ * which is why this is separate from SPEC2TEST_CAPTURE: that one stays
+ * subject-only because it feeds immunity-fault derivation, which samples the
+ * single response the assertions are about.
+ *
+ * Keying by the *resolved* pathname is what makes a chain replayable at all:
+ * the subject's path is only known after a setup step supplies the captured
+ * value, so recording the spec's raw `/api/articles/{{capture.slug}}` would
+ * produce a key nothing ever looks up.
+ *
+ * Two setup steps sharing a method+path - registering two users, say -
+ * collapse to one entry, so on replay both receive the same canned response.
+ * That is acceptable rather than a gap: replay exists to prove the assertion
+ * expressions evaluate correctly against a known-good response shape, and the
+ * assertions only ever read the subject's response.
+ */
+export function withTranscriptCapture(base: Transport, transcriptPath: string): Transport {
+  const recorded: Record<string, ApiResponse> = {};
+  return async (method, url, init) => {
+    const result = await base(method, url, init);
+    recorded[`${method} ${new URL(url).pathname}`] = result;
+    writeFileSync(transcriptPath, JSON.stringify(recorded, null, 2), 'utf8');
     return result;
   };
 }
@@ -180,7 +225,12 @@ function resolveTransport(): Transport {
     : process.env.SPEC2TEST_TRANSCRIPT
       ? transcriptTransport(process.env.SPEC2TEST_TRANSCRIPT)
       : liveTransport;
-  return process.env.SPEC2TEST_CAPTURE ? withCapture(base, process.env.SPEC2TEST_CAPTURE) : base;
+  const captured = process.env.SPEC2TEST_CAPTURE
+    ? withCapture(base, process.env.SPEC2TEST_CAPTURE)
+    : base;
+  return process.env.SPEC2TEST_TRANSCRIPT_CAPTURE
+    ? withTranscriptCapture(captured, process.env.SPEC2TEST_TRANSCRIPT_CAPTURE)
+    : captured;
 }
 
 let transport: Transport = resolveTransport();
@@ -201,14 +251,14 @@ class ApiClient {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
     if (opts.auth === 'user') {
-      const token = process.env.TARGET_AUTH_TOKEN;
+      const token = opts.authToken || process.env.TARGET_AUTH_TOKEN;
       if (!token) {
         throw new Error('TARGET_AUTH_TOKEN is not set - required for an auth: "user" request');
       }
       headers.Authorization = `Bearer ${token}`;
     }
 
-    return transport(method, `${baseUrl}${path}`, { body: opts.body, headers });
+    return transport(method, `${baseUrl}${path}`, { body: opts.body, headers, subject: opts.subject });
   }
 }
 

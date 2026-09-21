@@ -10,7 +10,12 @@ import { certifyTestCase } from '../certify.ts';
 import type { CertifyResult } from '../certify.ts';
 import { computeVerification } from '../verification.ts';
 import type { VerificationResult } from '../verification.ts';
-import type { FalsificationReport, GenerateResult, ValidationReport } from '../runner/types.ts';
+import type {
+  FalsificationReport,
+  GenerateResult,
+  SpecValidationResult,
+  ValidationReport,
+} from '../runner/types.ts';
 
 /**
  * Processes exactly one job: generate -> validate -> falsify, all via the
@@ -27,6 +32,7 @@ export interface RunOnceResult {
   jobId: string;
   status: 'done' | 'failed';
   lastError?: string;
+  grounding?: SpecValidationResult;
   generate?: GenerateResult;
   validation?: ValidationReport;
   falsification?: FalsificationReport;
@@ -82,6 +88,31 @@ export async function runOnce(jobId: string): Promise<RunOnceResult> {
   }
 
   try {
+    // Grounding first, before a single line is generated. A spec naming a
+    // route the schema doesn't document - or a chain referencing a capture no
+    // setup step produces - must be refused here, not discovered later as a
+    // puzzling 404 in the smoke run after a file has already been written to
+    // the target repo.
+    //
+    // This is the check that makes "Claude cannot invent a route" true, and it
+    // matters from step 5 onward, when specs stop being hand-written. Until
+    // now nothing in this pipeline called it: the worker ran generate ->
+    // validate -> falsify, and grounding is not one of validate's five stages.
+    const groundingRes = runRunnerCli<SpecValidationResult>(['validate-spec', specPath, ctx.openapiPath]);
+    if (!groundingRes.ok) {
+      const message = `validate-spec crashed: ${groundingRes.error?.message ?? 'unknown error'}`;
+      await failJob(job.id, message);
+      const verification = await computeVerification(ctx.requirementId);
+      return { jobId: job.id, status: 'failed', lastError: message, verification };
+    }
+    const grounding = groundingRes.result!;
+    if (!grounding.ok) {
+      const message = `${grounding.event}: ${grounding.message}`;
+      await failJob(job.id, message);
+      const verification = await computeVerification(ctx.requirementId);
+      return { jobId: job.id, status: 'failed', lastError: message, grounding, verification };
+    }
+
     const generateRes = runRunnerCli<GenerateResult>(['generate', specPath, ctx.generatedDir]);
     if (!generateRes.ok) {
       const message = `generate crashed: ${generateRes.error?.message ?? 'unknown error'}`;
