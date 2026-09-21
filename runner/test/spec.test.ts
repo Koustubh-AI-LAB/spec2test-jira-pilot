@@ -124,6 +124,137 @@ describe('validateSpec', () => {
     });
   });
 
+  it('grounds every setup step, not just the subject', () => {
+    const badSetup: TestCaseSpec = {
+      ...grounded,
+      setup: [
+        {
+          name: 'invent a route',
+          method: 'POST',
+          path: '/api/definitely-not-a-real-endpoint',
+          auth: 'none',
+        },
+      ],
+    };
+    assert.throws(() => validateSpec(badSetup, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_not_grounded');
+      assert.match(err.message, /setup step 1 \("invent a route"\)/);
+      return true;
+    });
+  });
+
+  it('rejects a reference to a capture no setup step produces', () => {
+    const typo: TestCaseSpec = {
+      ...grounded,
+      setup: [
+        {
+          name: 'register',
+          method: 'POST',
+          path: '/api/users',
+          auth: 'none',
+          body: { user: { username: 'u', email: 'e@x.dev', password: 'p' } },
+          capture: { token: ['user', 'token'] },
+        },
+      ],
+      auth: 'user',
+      authToken: '{{capture.tokne}}',
+    };
+    assert.throws(() => validateSpec(typo, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_unknown_capture');
+      assert.match(err.message, /available at this point: token/);
+      return true;
+    });
+  });
+
+  it('rejects a forward reference - a capture declared by a LATER step', () => {
+    const forward: TestCaseSpec = {
+      ...grounded,
+      setup: [
+        {
+          name: 'uses it too early',
+          method: 'POST',
+          path: '/api/articles',
+          auth: 'user',
+          authToken: '{{capture.token}}',
+          body: { article: { title: 't', description: 'd', body: 'b' } },
+        },
+        {
+          name: 'declares it afterwards',
+          method: 'POST',
+          path: '/api/users',
+          auth: 'none',
+          body: { user: { username: 'u', email: 'e@x.dev', password: 'p' } },
+          capture: { token: ['user', 'token'] },
+        },
+      ],
+    };
+    assert.throws(() => validateSpec(forward, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_unknown_capture');
+      assert.match(err.message, /no captures are declared before it/);
+      return true;
+    });
+  });
+
+  it('rejects two setup steps capturing the same name, which would silently shadow', () => {
+    const step = {
+      name: 'register',
+      method: 'POST' as const,
+      path: '/api/users',
+      auth: 'none' as const,
+      body: { user: { username: 'u', email: 'e@x.dev', password: 'p' } },
+      capture: { token: ['user', 'token'] },
+    };
+    const duplicated: TestCaseSpec = { ...grounded, setup: [step, { ...step, name: 'register again' }] };
+    assert.throws(() => validateSpec(duplicated, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_duplicate_capture');
+      return true;
+    });
+  });
+
+  it('rejects an authToken on a request that is not auth: "user" - it would be silently ignored', () => {
+    const ignored: TestCaseSpec = { ...grounded, auth: 'none', authToken: 'whatever' };
+    assert.throws(() => validateSpec(ignored, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_auth_token_without_user');
+      return true;
+    });
+  });
+
+  it('accepts a well-formed chain, including an interpolated subject path', () => {
+    const chained: TestCaseSpec = {
+      ...grounded,
+      setup: [
+        {
+          name: 'register the author',
+          method: 'POST',
+          path: '/api/users',
+          auth: 'none',
+          body: { user: { username: 'u', email: 'e@x.dev', password: 'p' } },
+          capture: { authorToken: ['user', 'token'] },
+        },
+        {
+          name: 'create an article',
+          method: 'POST',
+          path: '/api/articles',
+          auth: 'user',
+          authToken: '{{capture.authorToken}}',
+          body: { article: { title: 't', description: 'd', body: 'b' } },
+          capture: { slug: ['article', 'slug'] },
+        },
+      ],
+      method: 'PUT',
+      path: '/api/articles/{{capture.slug}}',
+      auth: 'user',
+      authToken: '{{capture.authorToken}}',
+      body: { article: { title: 'edited' } },
+    };
+    assert.doesNotThrow(() => validateSpec(chained, schema));
+  });
+
   it('rejects a spec missing criterionId', () => {
     const bad: TestCaseSpec = { ...grounded, criterionId: '' };
     assert.throws(() => validateSpec(bad, schema), (err: unknown) => {

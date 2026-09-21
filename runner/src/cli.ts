@@ -1,4 +1,4 @@
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initTargetRepo } from './init.ts';
@@ -136,12 +136,19 @@ function main(): void {
       try {
         if (!transcriptPath) {
           // No hand-authored fixture transcript exists for a real
-          // Claude-drafted test - synthesize one from a live run, reusing
-          // the exact capture side-channel runFalsification.ts already
-          // relies on for the same purpose.
+          // Claude-drafted test - synthesize one from a live run via the
+          // transcript-capture side channel, which records every request in
+          // the run keyed the way transcriptTransport looks entries up.
+          //
+          // Deliberately NOT SPEC2TEST_CAPTURE: that one is subject-only (it
+          // feeds immunity-fault derivation) and its single flat {status,
+          // body} cannot describe a chained test, whose setup requests each
+          // need their own transcript entry.
           workDir = mkdtempSync(join(tmpdir(), 'spec2test-transcript-'));
-          const capturePath = join(workDir, 'capture.json');
-          const captureRun = runPlaywright(targetRepoRoot, filePath, { SPEC2TEST_CAPTURE: capturePath });
+          transcriptPath = join(workDir, 'transcript.json');
+          const captureRun = runPlaywright(targetRepoRoot, filePath, {
+            SPEC2TEST_TRANSCRIPT_CAPTURE: transcriptPath,
+          });
           if (!captureRun.passed) {
             emit({
               ok: false,
@@ -157,14 +164,11 @@ function main(): void {
               ],
             });
           }
-          // The capture file is one flat {status, body} for the single
-          // request that ran; the transcript format apiClient.ts's
-          // transcriptTransport expects is keyed by "METHOD path" (see
-          // runner/src/client/apiClient.ts) - wrapping is required, the two
-          // shapes are not interchangeable.
-          const captured = JSON.parse(readFileSync(capturePath, 'utf8'));
-          transcriptPath = join(workDir, 'transcript.json');
-          writeFileSync(transcriptPath, JSON.stringify({ [`${spec.method} ${spec.path}`]: captured }), 'utf8');
+          // The channel writes the transcript in its final form already - one
+          // entry per distinct method+resolved-path - so there is nothing to
+          // reshape here. The old wrap keyed off spec.path, which for a
+          // chained spec is the un-interpolated "/api/articles/{{capture.slug}}"
+          // and matches nothing at replay time.
         }
 
         const report = validate({

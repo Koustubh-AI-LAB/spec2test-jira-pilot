@@ -238,6 +238,30 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     assert.equal(res.body.event, 'test_case_not_approved');
   });
 
+  it('refuses a spec naming a route the schema does not document, before any file is written', async () => {
+    const name = `worker ungrounded ${Date.now()}`;
+    const { testCase } = await seedApprovedTestCase('WORKER-UNGROUNDED', {
+      criterionId: 'C-WORKER-UNGROUNDED',
+      name,
+      method: 'POST',
+      path: '/api/definitely-not-a-real-endpoint',
+      auth: 'none',
+      assertions: [{ name: 'responds', check: 'status === 201' }],
+    });
+
+    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'failed');
+    assert.match(res.body.lastError, /spec_not_grounded/);
+
+    // Grounding runs first precisely so this never happens: without it the
+    // spec would be rendered to disk and only fail later as a puzzling 404
+    // from the live smoke run.
+    assert.equal(res.body.generate, undefined, 'generate must not have run');
+    const wouldBeFile = join(spec2testDir, 'generated', `${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.spec.ts`);
+    assert.equal(existsSync(wouldBeFile), false, 'no file may be written for an ungrounded spec');
+  });
+
   it('fails the job rather than leaving it running when the context cannot be loaded', async () => {
     const { requirement, testCase } = await seedApprovedTestCase('WORKER-BADENV', {
       criterionId: 'C-WORKER-BADENV',

@@ -68,7 +68,104 @@ describe('generator determinism', () => {
     };
     const source = render(noBodySpec);
     assert.doesNotMatch(source, /requestBody/);
-    assert.match(source, /apiClient\.request\("GET", "\/api\/articles", \{ auth: "none" \}\)/);
+    assert.match(source, /apiClient\.request\("GET", "\/api\/articles", \{ auth: "none", subject: true \}\)/);
+  });
+});
+
+const chainedSpec: TestCaseSpec = {
+  criterionId: 'C-AUTHOR-ONLY',
+  name: 'only the author may edit an article',
+  setup: [
+    {
+      name: 'register the author',
+      method: 'POST',
+      path: '/api/users',
+      auth: 'none',
+      body: { user: { username: 'author_{{unique}}' } },
+      capture: { authorToken: ['user', 'token'] },
+    },
+    {
+      name: 'the author creates an article',
+      method: 'POST',
+      path: '/api/articles',
+      auth: 'user',
+      authToken: '{{capture.authorToken}}',
+      body: { article: { title: 'Ownership {{unique}}' } },
+      capture: { slug: ['article', 'slug'] },
+    },
+  ],
+  method: 'PUT',
+  path: '/api/articles/{{capture.slug}}',
+  auth: 'user',
+  authToken: '{{capture.authorToken}}',
+  body: { article: { title: 'hijacked' } },
+  assertions: [{ name: 'non_author_is_refused', check: 'status === 403' }],
+};
+
+describe('generator: chained specs', () => {
+  it('renders each setup request in its own block scope, in declaration order', () => {
+    const source = render(chainedSpec);
+    assert.match(source, /\/\/ setup: register the author/);
+    assert.match(source, /\/\/ setup: the author creates an article/);
+    assert.ok(
+      source.indexOf('// setup: register the author') < source.indexOf('// setup: the author creates an article'),
+      'setup steps must render in the order they are declared',
+    );
+    // Block scoping is what lets every step destructure status/body without
+    // colliding with the subject request's own declaration.
+    assert.equal(source.match(/const \{ status, body \} = await apiClient\.request/g)?.length, 3);
+  });
+
+  it('extracts each capture with optional access and asserts it was actually produced', () => {
+    const source = render(chainedSpec);
+    assert.match(source, /captures\["authorToken"\] = body\?\.\["user"\]\?\.\["token"\];/);
+    assert.match(source, /expect\(captures\["authorToken"\], "setup step \\"register the author\\" did not produce capture \\"authorToken\\""\)\.toBeDefined\(\);/);
+  });
+
+  it('fails a setup step outside any named assertion, so a broken control cannot score as a KILL', () => {
+    const source = render(chainedSpec);
+    const setupFailure = /expect\(status, "setup step \\"register the author\\" failed"\)\.toBeLessThan\(400\);/;
+    assert.match(source, setupFailure);
+    // The guard must not sit inside a test.step - Playwright attributes a
+    // named step's failure to that assertion, and a broken setup is not an
+    // assertion failing.
+    const stepBlocks = source.slice(source.indexOf('await test.step('));
+    assert.doesNotMatch(stepBlocks, setupFailure);
+  });
+
+  it('interpolates {{capture.X}} into the path and the auth token', () => {
+    const source = render(chainedSpec);
+    assert.match(source, /apiClient\.request\("PUT", `\/api\/articles\/\$\{captures\["slug"\]\}`/);
+    assert.match(source, /authToken: `\$\{captures\["authorToken"\]\}`/);
+    assert.doesNotMatch(source, /\{\{capture\./);
+  });
+
+  it('marks exactly one request as the subject - the fault-injection seam', () => {
+    const source = render(chainedSpec);
+    assert.equal(source.match(/subject: true/g)?.length, 1);
+    // ...and it is the last request, not a setup step.
+    assert.ok(source.indexOf('subject: true') > source.lastIndexOf('// setup:'));
+  });
+
+  it('renders a chained spec byte-identically twice', () => {
+    assert.equal(render(chainedSpec), render(chainedSpec));
+  });
+
+  it('declares no captures object for an unchained spec', () => {
+    const source = render(registerSpec);
+    assert.doesNotMatch(source, /const captures/);
+    assert.doesNotMatch(source, /\/\/ setup:/);
+  });
+
+  it('escapes backticks and ${ in a string that also interpolates', () => {
+    const nasty: TestCaseSpec = {
+      ...chainedSpec,
+      body: { article: { title: 'a `backtick` and ${notASubstitution} {{capture.slug}}' } },
+    };
+    const source = render(nasty);
+    assert.match(source, /\\`backtick\\`/);
+    assert.match(source, /\\\$\{notASubstitution\}/);
+    assert.match(source, /\$\{captures\["slug"\]\}/);
   });
 });
 

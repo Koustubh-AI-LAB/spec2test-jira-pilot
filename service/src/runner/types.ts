@@ -60,3 +60,11 @@ export interface GenerateResult {
   event?: string;
   message?: string;
 }
+
+/** What `runner validate-spec` prints: the OpenAPI grounding check, which
+ *  runs before anything is generated. */
+export interface SpecValidationResult {
+  ok: boolean;
+  event?: string;
+  message?: string;
+}

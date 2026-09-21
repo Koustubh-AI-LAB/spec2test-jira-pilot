@@ -1,0 +1,34 @@
+{
+  "POST /api/users": {
+    "status": 201,
+    "body": {
+      "user": {
+        "email": "s2t_fixture@spec2test.dev",
+        "username": "s2t_fixture",
+        "bio": null,
+        "image": "https://api.realworld.io/images/smiley-cyrus.jpeg",
+        "token": "fixture.jwt.token"
+      }
+    }
+  },
+  "POST /api/articles": {
+    "status": 201,
+    "body": {
+      "article": {
+        "slug": "ownership-fixture-transcript",
+        "title": "Ownership fixture",
+        "description": "Created by the author so the intruder can be refused.",
+        "body": "Exercises the state-affecting rule tier-1 alone cannot certify.",
+        "tagList": ["spec2test"],
+        "favorited": false,
+        "favoritesCount": 0
+      }
+    }
+  },
+  "PUT /api/articles/ownership-fixture-transcript": {
+    "status": 403,
+    "body": {
+      "message": "You are not authorized to update this article"
+    }
+  }
+}

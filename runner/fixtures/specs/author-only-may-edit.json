@@ -1,0 +1,62 @@
+{
+  "criterionId": "C-AUTHOR-ONLY-EDIT",
+  "name": "only the author may edit an article",
+  "setup": [
+    {
+      "name": "register the author",
+      "method": "POST",
+      "path": "/api/users",
+      "auth": "none",
+      "body": {
+        "user": {
+          "username": "s2t_author_{{unique}}",
+          "email": "s2t_author_{{unique}}@spec2test.dev",
+          "password": "Spec2Test!1"
+        }
+      },
+      "capture": { "authorToken": ["user", "token"] }
+    },
+    {
+      "name": "register the intruder",
+      "method": "POST",
+      "path": "/api/users",
+      "auth": "none",
+      "body": {
+        "user": {
+          "username": "s2t_intruder_{{unique}}",
+          "email": "s2t_intruder_{{unique}}@spec2test.dev",
+          "password": "Spec2Test!1"
+        }
+      },
+      "capture": { "intruderToken": ["user", "token"] }
+    },
+    {
+      "name": "the author creates an article",
+      "method": "POST",
+      "path": "/api/articles",
+      "auth": "user",
+      "authToken": "{{capture.authorToken}}",
+      "body": {
+        "article": {
+          "title": "Ownership fixture {{unique}}",
+          "description": "Created by the author so the intruder can be refused.",
+          "body": "Exercises the state-affecting rule tier-1 alone cannot certify.",
+          "tagList": ["spec2test"]
+        }
+      },
+      "capture": { "slug": ["article", "slug"] }
+    }
+  ],
+  "method": "PUT",
+  "path": "/api/articles/{{capture.slug}}",
+  "auth": "user",
+  "authToken": "{{capture.intruderToken}}",
+  "body": {
+    "article": {
+      "title": "Hijacked by someone who is not the author {{unique}}"
+    }
+  },
+  "assertions": [
+    { "name": "non_author_is_refused", "check": "status === 403" }
+  ]
+}
