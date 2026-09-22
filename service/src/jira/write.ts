@@ -31,10 +31,26 @@ export interface PostCriteriaInput {
   certified?: number;
 }
 
+/**
+ * What a confirmed write would put on the ticket. Built by the very same
+ * comment builder the real write uses, from the same inputs and the same
+ * fingerprint - that is what makes "preview, then confirm" mean the body you
+ * read is the body that lands, not a second rendering that could drift.
+ */
+export interface WritePreview {
+  comment: AdfNode;
+  /** Field values that would be set alongside the comment. */
+  fields: Record<string, unknown>;
+}
+
 export interface WriteOutcome {
   wrote: boolean;
   reason: string;
   fingerprint: string;
+  /** Set on a dry run. `wrote` is always false then, and Jira was only read. */
+  dryRun?: boolean;
+  /** Absent when there is nothing to preview: unchanged, or already on the ticket. */
+  preview?: WritePreview;
 }
 
 const LABEL = 'spec2test';
@@ -178,14 +194,26 @@ async function findPostedComment(
   return match && { id: match.id, created: match.created };
 }
 
+function criteriaFields(input: PostCriteriaInput, fields: FieldMap): Record<string, unknown> {
+  return {
+    [fields.verificationStatus]: { value: VERIFICATION_STATUS.criteriaDrafted },
+    [fields.criteriaCertified]: input.certified ?? 0,
+    [fields.criteriaTotal]: input.criteria.length,
+  };
+}
+
 /**
  * Post drafted criteria and set the Gate 1 surface. Idempotent: a second call
  * with unchanged content is a no-op that reports why.
+ *
+ * `dryRun` reads Jira (the property and the recent comments, exactly as a real
+ * write does) and writes nothing, returning the comment and field values a
+ * confirmed call would send.
  */
 export async function postCriteria(
   client: JiraClient,
   input: PostCriteriaInput,
-  options: { fields?: FieldMap; force?: boolean } = {},
+  options: { fields?: FieldMap; force?: boolean; dryRun?: boolean } = {},
 ): Promise<WriteOutcome> {
   const fields = options.fields ?? loadFieldMap();
   const coverageState = 'criteria_drafted';
@@ -197,15 +225,34 @@ export async function postCriteria(
       wrote: false,
       reason: 'unchanged since the last write; comment and fields left alone',
       fingerprint,
+      ...(options.dryRun ? { dryRun: true } : {}),
+    };
+  }
+
+  if (options.dryRun) {
+    const posted = await findPostedComment(client, input.issueKey, fingerprint);
+    if (posted) {
+      return {
+        wrote: false,
+        dryRun: true,
+        reason: 'preview: this comment is already on the ticket; a confirmed call would only finish recording it',
+        fingerprint,
+      };
+    }
+    return {
+      wrote: false,
+      dryRun: true,
+      reason: `preview: would post ${input.criteria.length} criteria`,
+      fingerprint,
+      preview: {
+        comment: criteriaComment(input, client.browseUrl(input.issueKey), fingerprint),
+        fields: criteriaFields(input, fields),
+      },
     };
   }
 
   await client.request('PUT', `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}`, {
-    fields: {
-      [fields.verificationStatus]: { value: VERIFICATION_STATUS.criteriaDrafted },
-      [fields.criteriaCertified]: input.certified ?? 0,
-      [fields.criteriaTotal]: input.criteria.length,
-    },
+    fields: criteriaFields(input, fields),
     update: { labels: [{ add: LABEL }] },
   });
 
@@ -263,44 +310,64 @@ export async function postCriteria(
   };
 }
 
+function driftComment(): AdfNode {
+  return {
+    type: 'doc',
+    version: 1,
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            text:
+              'spec2test: the requirement text changed after these criteria were approved, ' +
+              'so the approval no longer applies. Existing tests keep running, but stop ' +
+              'counting as certified until the criteria are re-approved.',
+          },
+        ],
+      },
+    ],
+  } as AdfNode;
+}
+
 /** Mark the ticket stale after drift, so the PO learns it from Jira. */
 export async function postDrift(
   client: JiraClient,
   issueKey: string,
   drift: { approvedHash: string; currentHash: string },
-  options: { fields?: FieldMap } = {},
+  options: { fields?: FieldMap; dryRun?: boolean } = {},
 ): Promise<WriteOutcome> {
   const fields = options.fields ?? loadFieldMap();
   const fingerprint = contentHash(`stale:${drift.currentHash}`);
+  const staleFields = { [fields.verificationStatus]: { value: VERIFICATION_STATUS.stale } };
 
   const existing = await readProperty(client, issueKey);
   if (existing?.fingerprint === fingerprint) {
-    return { wrote: false, reason: 'drift already reported for this text', fingerprint };
+    return {
+      wrote: false,
+      reason: 'drift already reported for this text',
+      fingerprint,
+      ...(options.dryRun ? { dryRun: true } : {}),
+    };
+  }
+
+  if (options.dryRun) {
+    return {
+      wrote: false,
+      dryRun: true,
+      reason: 'preview: would report drift on the ticket',
+      fingerprint,
+      preview: { comment: driftComment(), fields: staleFields },
+    };
   }
 
   await client.request('PUT', `/rest/api/3/issue/${encodeURIComponent(issueKey)}`, {
-    fields: { [fields.verificationStatus]: { value: VERIFICATION_STATUS.stale } },
+    fields: staleFields,
   });
 
   await client.request('POST', `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, {
-    body: {
-      type: 'doc',
-      version: 1,
-      content: [
-        {
-          type: 'paragraph',
-          content: [
-            {
-              type: 'text',
-              text:
-                'spec2test: the requirement text changed after these criteria were approved, ' +
-                'so the approval no longer applies. Existing tests keep running, but stop ' +
-                'counting as certified until the criteria are re-approved.',
-            },
-          ],
-        },
-      ],
-    },
+    body: driftComment(),
   });
 
   // Merge, never replace: `criteria_posted` / `criteria_posted_at` are the
@@ -333,16 +400,33 @@ export async function postRefusal(
   client: JiraClient,
   issueKey: string,
   outcome: { action: string; detail: string },
+  options: { dryRun?: boolean } = {},
 ): Promise<WriteOutcome> {
   const fingerprint = contentHash(`${outcome.action}:${outcome.detail}`);
 
   const existing = await readProperty(client, issueKey);
   if (existing?.fingerprint === fingerprint) {
-    return { wrote: false, reason: 'already reported for this outcome', fingerprint };
+    return {
+      wrote: false,
+      reason: 'already reported for this outcome',
+      fingerprint,
+      ...(options.dryRun ? { dryRun: true } : {}),
+    };
+  }
+
+  const comment = textToAdf(`spec2test: ${outcome.detail}`);
+  if (options.dryRun) {
+    return {
+      wrote: false,
+      dryRun: true,
+      reason: `preview: would report ${outcome.action} on the ticket`,
+      fingerprint,
+      preview: { comment, fields: {} },
+    };
   }
 
   await client.request('POST', `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, {
-    body: textToAdf(`spec2test: ${outcome.detail}`),
+    body: comment,
   });
 
   await writeProperty(client, issueKey, {
@@ -468,26 +552,55 @@ function verificationComment(input: PostVerificationInput, browseUrl: string, fi
 export async function postVerification(
   client: JiraClient,
   input: PostVerificationInput,
-  options: { fields?: FieldMap } = {},
+  options: { fields?: FieldMap; dryRun?: boolean } = {},
 ): Promise<WriteOutcome> {
   const fields = options.fields ?? loadFieldMap();
   const fingerprint = verificationFingerprint(input);
 
   const existing = await readProperty(client, input.issueKey);
   if (existing?.fingerprint === fingerprint) {
-    return { wrote: false, reason: 'verification unchanged since the last write', fingerprint };
+    return {
+      wrote: false,
+      reason: 'verification unchanged since the last write',
+      fingerprint,
+      ...(options.dryRun ? { dryRun: true } : {}),
+    };
   }
 
   const certifiedCount = input.criteria.filter((c) => c.covered).length;
   const now = new Date().toISOString();
+  const verificationFields = {
+    [fields.verificationStatus]: { value: verificationStatusValue(input.state) },
+    [fields.criteriaCertified]: certifiedCount,
+    [fields.criteriaTotal]: input.criteria.length,
+  };
+
+  if (options.dryRun) {
+    const posted = await findPostedComment(client, input.issueKey, fingerprint);
+    if (posted) {
+      return {
+        wrote: false,
+        dryRun: true,
+        reason: 'preview: this comment is already on the ticket; a confirmed call would only finish recording it',
+        fingerprint,
+      };
+    }
+    return {
+      wrote: false,
+      dryRun: true,
+      reason: `preview: would post verification: ${verificationStatusValue(input.state)}`,
+      fingerprint,
+      // Last Verified is deliberately absent: it is stamped with the wall clock
+      // when the write is confirmed, so a preview cannot honestly show it.
+      preview: {
+        comment: verificationComment(input, client.browseUrl(input.issueKey), fingerprint),
+        fields: verificationFields,
+      },
+    };
+  }
 
   await client.request('PUT', `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}`, {
-    fields: {
-      [fields.verificationStatus]: { value: verificationStatusValue(input.state) },
-      [fields.criteriaCertified]: certifiedCount,
-      [fields.criteriaTotal]: input.criteria.length,
-      [fields.lastVerified]: now,
-    },
+    fields: { ...verificationFields, [fields.lastVerified]: now },
   });
 
   const already = await findPostedComment(client, input.issueKey, fingerprint);

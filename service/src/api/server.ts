@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { getPool } from '../db/pool.ts';
@@ -8,19 +9,36 @@ import type { Channel, Decision, Gate } from '../gates/gates.ts';
 import { capabilitiesFor, isEnvironmentClass } from '../env/capabilities.ts';
 import { EnvironmentNotAllowedError, ServiceError } from '../errors.ts';
 import { jiraClient } from '../jira/client.ts';
+import type { JiraClient } from '../jira/client.ts';
 import { reconcile } from '../jira/reconcile.ts';
 import { loadFieldMap, validateFieldMap } from '../jira/read.ts';
 import { postCriteria, postDrift, postRefusal, postVerification } from '../jira/write.ts';
 import type { CriterionView } from '../jira/write.ts';
 import { runOnce } from '../worker/index.ts';
 import { computeVerification } from '../verification.ts';
+import { pipelineState } from '../pipeline.ts';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A malformed id would otherwise reach Postgres and come back as a 500. */
+function isUuid(value: string): boolean {
+  return UUID.test(value);
+}
 
 /**
  * Bumped whenever the plugin-facing contract changes. The skill checks this at
  * preflight and refuses to run on a mismatch: a cached older plugin talking to
  * a newer schema is a way to corrupt state quietly.
+ *
+ * 2: adds GET /pipeline/:issueKey, GET /environments/:id/grounding,
+ *    GET /jobs/:id and the `dry_run` flag on POST /jira/:issueKey/criteria and
+ *    /verification; POST /requirements no longer demands provenance on a
+ *    resume; POST /test-cases accepts an `uncovered` criterion. (Two routes -
+ *    /jira/:issueKey/verification and /test-cases/:id/verify - were added to
+ *    version 1 without a bump, which is why this jumps rather than tracking
+ *    each one.)
  */
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 
 interface Provenance {
   drafted_by_model: string;
@@ -41,9 +59,15 @@ function requireProvenance(body: Partial<Provenance>): Provenance {
   return { drafted_by_model, prompt_version, grounding_hash, temperature: body.temperature };
 }
 
-export function buildServer(): FastifyInstance {
+export interface ServerOptions {
+  /** Supplies the Jira client. Defaults to the env-configured singleton; tests inject a fake. */
+  jira?: () => JiraClient;
+}
+
+export function buildServer(options: ServerOptions = {}): FastifyInstance {
   const app = Fastify({ logger: false });
   const pool = getPool();
+  const getJira = options.jira ?? jiraClient;
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ServiceError) {
@@ -104,6 +128,47 @@ export function buildServer(): FastifyInstance {
     return { ...env, capabilities: capabilitiesFor(env.class) };
   });
 
+  /**
+   * The OpenAPI document an environment's specs are grounded against, plus its
+   * hash. The service owns both so the plugin never hashes its own copy: the
+   * `grounding_hash` recorded as draft provenance is then always the hash of
+   * what the service itself would validate against - one hash, one owner.
+   *
+   * `openapi_url` is a local file path in practice, not a URL - the runner
+   * reads it with `readFileSync` - so it is read the same way here.
+   */
+  app.get('/environments/:id/grounding', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) throw new ServiceError('not_found', `environment ${id} not found`, 404);
+
+    const { rows } = await pool.query<{ openapi_url: string }>(
+      'SELECT openapi_url FROM environment WHERE id = $1',
+      [id],
+    );
+    const env = rows[0];
+    if (!env) throw new ServiceError('not_found', `environment ${id} not found`, 404);
+    if (!env.openapi_url) {
+      throw new ServiceError(
+        'openapi_not_configured',
+        `environment ${id} has no openapi_url - register it with the path to the target's OpenAPI document`,
+        409,
+      );
+    }
+
+    let text: string;
+    try {
+      text = readFileSync(env.openapi_url, 'utf8');
+    } catch (err) {
+      throw new ServiceError(
+        'openapi_unreadable',
+        `cannot read the OpenAPI document at "${env.openapi_url}" (it must be a local file path): ` +
+          (err instanceof Error ? err.message : String(err)),
+        500,
+      );
+    }
+    return { environmentId: id, source: env.openapi_url, text, contentHash: contentHash(text) };
+  });
+
   app.post('/requirements', async (req) => {
     const b = req.body as {
       project_id: string;
@@ -111,7 +176,6 @@ export function buildServer(): FastifyInstance {
       title: string;
       body: string;
     } & Partial<Provenance>;
-    const p = requireProvenance(b);
 
     const existing = await pool.query(
       `SELECT * FROM requirement
@@ -122,6 +186,11 @@ export function buildServer(): FastifyInstance {
     if (existing.rows[0]) {
       return { resumed: true, requirement: existing.rows[0] };
     }
+
+    // Checked only once we know a draft is actually being created. A resuming
+    // caller is not drafting anything, so it has no model id or prompt hash to
+    // supply - requiring them here would force it to invent both.
+    const p = requireProvenance(b);
 
     const { rows } = await pool.query(
       `INSERT INTO requirement
@@ -300,27 +369,50 @@ export function buildServer(): FastifyInstance {
       [b.criterion_id],
     );
     if (!criterionRows[0]) throw new ServiceError('not_found', `criterion ${b.criterion_id} not found`, 404);
-    if (criterionRows[0].state !== 'approved') {
+    // `uncovered` is Gate 1 having approved the criterion and Gate 2 having
+    // then rejected every test case for it (see the gate 2 route below). It is
+    // the state a redraft has to start from, so it must be draftable - refusing
+    // it left the criterion with no way back to being covered.
+    const criterionState = criterionRows[0].state;
+    if (criterionState !== 'approved' && criterionState !== 'uncovered') {
       throw new ServiceError(
         'criterion_not_approved',
-        `criterion ${b.criterion_id} is "${criterionRows[0].state}", not "approved" - gate 1 must close on ` +
+        `criterion ${b.criterion_id} is "${criterionState}", not "approved" - gate 1 must close on ` +
           'this criterion before a test case can be drafted against it',
       );
     }
 
     const serialised = JSON.stringify(b.spec);
-    const { rows } = await pool.query(
-      `INSERT INTO test_case
-         (criterion_id, name, kind, spec, content_hash,
-          drafted_by_model, prompt_version, grounding_hash, temperature)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [
-        b.criterion_id, b.name, b.kind, serialised, contentHash(serialised),
-        p.drafted_by_model, p.prompt_version, p.grounding_hash, p.temperature ?? null,
-      ],
-    );
-    return rows[0];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `INSERT INTO test_case
+           (criterion_id, name, kind, spec, content_hash,
+            drafted_by_model, prompt_version, grounding_hash, temperature)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [
+          b.criterion_id, b.name, b.kind, serialised, contentHash(serialised),
+          p.drafted_by_model, p.prompt_version, p.grounding_hash, p.temperature ?? null,
+        ],
+      );
+      // `uncovered` was defined as "no non-rejected test case", and there is
+      // one again. Gate 1's approval never went away, so the criterion goes
+      // back to `approved` rather than staying stuck in a derived state.
+      if (criterionState === 'uncovered') {
+        await client.query(`UPDATE criterion SET state = 'approved', updated_at = now() WHERE id = $1`, [
+          b.criterion_id,
+        ]);
+      }
+      await client.query('COMMIT');
+      return rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   for (const gate of [1, 2] as Gate[]) {
@@ -428,12 +520,41 @@ export function buildServer(): FastifyInstance {
     return runOnce(jobRows[0]!.id);
   });
 
+  /**
+   * A job's state, for the skill to poll. `verify` is synchronous today, so a
+   * job is already `done` or `failed` by the time anyone can ask - but this is
+   * the contract the skill polls once the worker loop makes `verify` return
+   * immediately, so `SKILL.md` will not need rewriting when that lands.
+   */
+  app.get('/jobs/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) throw new ServiceError('not_found', `job ${id} not found`, 404);
+
+    const { rows } = await pool.query(
+      `SELECT id, kind, requirement_id, payload, state, attempts, last_error, created_at, updated_at
+         FROM job WHERE id = $1`,
+      [id],
+    );
+    if (!rows[0]) throw new ServiceError('not_found', `job ${id} not found`, 404);
+    return rows[0];
+  });
+
   // --- Jira -------------------------------------------------------------
   // The service owns all Jira I/O. Nothing is reachable *from* Jira: every
   // route here pulls the ticket's current state and reconciles against it.
 
+  /**
+   * The single stage-detection query. Read-only: the reconcile inside it is a
+   * dry run. The skill switches on `stage` rather than reconstructing position
+   * from several calls, so it cannot disagree with the service about where it is.
+   */
+  app.get('/pipeline/:issueKey', async (req) => {
+    const { issueKey } = req.params as { issueKey: string };
+    return pipelineState(getJira(), issueKey);
+  });
+
   app.get('/jira/preflight', async () => {
-    const client = jiraClient();
+    const client = getJira();
     const me = await client.preflight();
     // Auth succeeding says nothing about whether the configured field ids are
     // real - that failure is otherwise silent (see validateFieldMap), so a
@@ -453,7 +574,7 @@ export function buildServer(): FastifyInstance {
   app.post('/jira/:issueKey/reconcile', async (req) => {
     const { issueKey } = req.params as { issueKey: string };
     const { dry_run } = (req.body ?? {}) as { dry_run?: boolean };
-    const client = jiraClient();
+    const client = getJira();
     const result = await reconcile(client, issueKey, { dryRun: dry_run ?? false });
 
     // Any outcome the PO would otherwise not see is reported back onto the
@@ -475,10 +596,14 @@ export function buildServer(): FastifyInstance {
       verificationStatus: ticket.verificationStatus, labels: ticket.labels } };
   });
 
-  /** Push drafted criteria onto the ticket. No-op when nothing changed. */
+  /**
+   * Push drafted criteria onto the ticket. No-op when nothing changed.
+   * `dry_run` returns the comment and field values a confirmed call would send
+   * (built by the same code, same fingerprint) and writes nothing to Jira.
+   */
   app.post('/jira/:issueKey/criteria', async (req) => {
     const { issueKey } = req.params as { issueKey: string };
-    const body = req.body as { requirement_id: string; force?: boolean };
+    const body = req.body as { requirement_id: string; force?: boolean; dry_run?: boolean };
 
     const { rows } = await pool.query(
       `SELECT c.id, c.ordinal, c.body, c.content_hash, c.state_affecting, r.source_text_hash
@@ -499,9 +624,9 @@ export function buildServer(): FastifyInstance {
     }));
 
     const outcome = await postCriteria(
-      jiraClient(),
+      getJira(),
       { issueKey, criteria, requirementHash: rows[0].source_text_hash },
-      { force: body.force },
+      { force: body.force, dryRun: body.dry_run },
     );
     return outcome;
   });
@@ -513,7 +638,7 @@ export function buildServer(): FastifyInstance {
    */
   app.post('/jira/:issueKey/verification', async (req) => {
     const { issueKey } = req.params as { issueKey: string };
-    const body = req.body as { requirement_id: string };
+    const body = req.body as { requirement_id: string; dry_run?: boolean };
 
     const verification = await computeVerification(body.requirement_id);
     if (verification.state === 'unchanged' || verification.criteria.length === 0) {
@@ -536,17 +661,25 @@ export function buildServer(): FastifyInstance {
     );
     const bodyById = new Map(criterionRows.map((c) => [c.id, c.body]));
 
-    const outcome = await postVerification(jiraClient(), {
-      issueKey,
-      requirementHash,
-      state: verification.state,
-      criteria: verification.criteria.map((c) => ({
-        id: c.id,
-        body: bodyById.get(c.id) ?? '',
-        stateAffecting: c.stateAffecting,
-        covered: c.covered,
-      })),
-    });
+    // `dry_run` leaves Jira untouched. It still runs computeVerification above,
+    // which refreshes the derived `requirement.state` in Postgres - that is a
+    // deterministic recompute of what the rows already say, not a decision, and
+    // every other state-changing step does the same.
+    const outcome = await postVerification(
+      getJira(),
+      {
+        issueKey,
+        requirementHash,
+        state: verification.state,
+        criteria: verification.criteria.map((c) => ({
+          id: c.id,
+          body: bodyById.get(c.id) ?? '',
+          stateAffecting: c.stateAffecting,
+          covered: c.covered,
+        })),
+      },
+      { dryRun: body.dry_run },
+    );
     return { verification, jira: outcome };
   });
 
