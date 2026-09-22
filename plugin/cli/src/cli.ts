@@ -1,10 +1,25 @@
 /**
- * 0.0 smoke-test skeleton only - proves the invocation plumbing (npm link
- * shim, permission-matcher shape, --json-file argument passing) before any
- * real command is built. Mirrors runner/src/cli.ts's parseArgs/emit shape so
- * the real 5.3 CLI can grow from this without a rewrite.
+ * The dispatcher the skill drives via `Bash(s2t:*)`. Mirrors
+ * runner/src/cli.ts's parseArgs/emit/usageError shape; see output.ts for how
+ * the envelope itself diverges (always {ok, command, ...} - this CLI's only
+ * consumer is an LLM reading the output, so uniformity is the whole point).
  */
-interface ParsedArgs {
+import { writeSync } from 'node:fs';
+import { usageError } from './output.ts';
+import { runPreflight } from './commands/preflight.ts';
+import { runStatus } from './commands/status.ts';
+import { runReconcile } from './commands/reconcile.ts';
+import { runDraftRequirement } from './commands/draft-requirement.ts';
+import { runDraftCriteria } from './commands/draft-criteria.ts';
+import { runRedraft } from './commands/redraft.ts';
+import { runGrounding } from './commands/grounding.ts';
+import { runPostCriteria } from './commands/post-criteria.ts';
+import { runDraftTestCase } from './commands/draft-test-case.ts';
+import { runApproveTestCase } from './commands/approve-test-case.ts';
+import { runVerify } from './commands/verify.ts';
+import { runSync } from './commands/sync.ts';
+
+export interface ParsedArgs {
   positionals: string[];
   flags: Record<string, string | boolean>;
 }
@@ -30,23 +45,45 @@ function parseArgs(args: string[]): ParsedArgs {
   return { positionals, flags };
 }
 
-function emit(payload: unknown): never {
-  console.log(JSON.stringify(payload));
-  process.exit(0);
+const COMMANDS: Record<string, (args: ParsedArgs) => Promise<never>> = {
+  preflight: runPreflight,
+  status: runStatus,
+  reconcile: runReconcile,
+  'draft-requirement': runDraftRequirement,
+  'draft-criteria': runDraftCriteria,
+  redraft: runRedraft,
+  grounding: runGrounding,
+  'post-criteria': runPostCriteria,
+  'draft-test-case': runDraftTestCase,
+  'approve-test-case': runApproveTestCase,
+  verify: runVerify,
+  sync: runSync,
+};
+
+async function main(): Promise<void> {
+  const [command, ...rest] = process.argv.slice(2);
+  if (!command) {
+    usageError('(none)', `usage: s2t <${Object.keys(COMMANDS).join('|')}> ...`);
+  }
+
+  const handler = COMMANDS[command];
+  if (!handler) {
+    usageError(command, `unknown command "${command}" - usage: s2t <${Object.keys(COMMANDS).join('|')}> ...`);
+  }
+
+  await handler(parseArgs(rest));
 }
 
-function usageError(message: string): never {
-  console.error(JSON.stringify({ event: 'usage_error', message }));
+try {
+  await main();
+} catch (err) {
+  // A genuine crash - anything a command handler did not turn into an
+  // emit()/emitFailure() call itself. Exit 1 on stderr, same as
+  // runner/src/cli.ts's top-level catch. writeSync, not console.error - see
+  // output.ts's doc comment on emit() for why.
+  writeSync(
+    2,
+    `${JSON.stringify({ event: 'unexpected_error', message: err instanceof Error ? err.message : String(err) })}\n`,
+  );
   process.exit(1);
 }
-
-const [command, ...rest] = process.argv.slice(2);
-const { positionals, flags } = parseArgs(rest);
-
-if (!command) {
-  usageError('usage: s2t <command> [...args]');
-}
-
-// Smoke-test stand-in: every command just echoes what it received, so 0.0
-// can confirm the shim + permission matcher work before real commands exist.
-emit({ ok: true, command, positionals, flags });
