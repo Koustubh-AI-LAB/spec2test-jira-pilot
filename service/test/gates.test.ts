@@ -107,6 +107,36 @@ describe('per-ticket idempotency', () => {
     assert.equal(again.body.requirement.id, first.requirement.id);
   });
 
+  // A resuming skill is not making a draft, so it has no model id or prompt
+  // hash to give. Provenance only guards a draft that is actually being
+  // created; demanding it on a resume would force the caller to invent values
+  // for a draft that never happens.
+  it('resumes without provenance, since nothing is being drafted', async () => {
+    const first = await seedRequirement('DUP-2');
+
+    const again = await post('/requirements', {
+      project_id: first.project.id,
+      jira_issue_key: 'DUP-2',
+      title: 'ignored on resume',
+      body: 'ignored on resume',
+    });
+    assert.equal(again.status, 200);
+    assert.equal(again.body.resumed, true);
+    assert.equal(again.body.requirement.id, first.requirement.id);
+  });
+
+  it('still refuses provenance-less input when it would create a new draft', async () => {
+    const project = (await post('/projects', { key: 'P-DUP-3', jira_project_key: 'PILOT' })).body;
+    const res = await post('/requirements', {
+      project_id: project.id,
+      jira_issue_key: 'DUP-3',
+      title: 't',
+      body: 'b',
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.event, 'provenance_required');
+  });
+
   it('enforces one open instance per issue at the database level', async () => {
     const { project } = await seedRequirement('IDX-1');
     await assert.rejects(
@@ -266,6 +296,75 @@ describe('gate 2 and segregation of duties', () => {
     });
 
     assert.equal(gate2.body.sameActorBothGates, false);
+  });
+});
+
+// A sequence, not a single transition: rejecting a criterion's only test case
+// marks the criterion `uncovered`, and the route's own comment promises the
+// way back is "just POST a new test case against the same criterion". That
+// promise was never exercised - the draft guard only accepted `approved`, so
+// the criterion was stuck `uncovered` with no route to getting it covered.
+describe('gate 2 rejection and redraft', () => {
+  async function seedApprovedCriterion(issueKey: string) {
+    const { requirement } = await seedRequirement(issueKey);
+    const criterion = (
+      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
+    ).body.criteria[0];
+    await post('/gate1/decisions', {
+      subject_id: criterion.id,
+      decision: 'approved',
+      actor: 'po@example.com',
+      channel: 'jira',
+      seen_hash: criterion.content_hash,
+    });
+    return criterion as { id: string; content_hash: string };
+  }
+
+  async function draftCase(criterionId: string, name: string) {
+    return post('/test-cases', {
+      criterion_id: criterionId,
+      name,
+      kind: 'api',
+      spec: { method: 'GET', path: '/loans' },
+      ...PROVENANCE,
+    });
+  }
+
+  async function criterionState(id: string): Promise<string> {
+    const { rows } = await getPool().query<{ state: string }>('SELECT state FROM criterion WHERE id = $1', [id]);
+    return rows[0]!.state;
+  }
+
+  it('lets a new test case be drafted after the only one was rejected, and re-approves the criterion', async () => {
+    const criterion = await seedApprovedCriterion('RD2-1');
+
+    const first = (await draftCase(criterion.id, 'first attempt')).body;
+    await post('/gate2/decisions', {
+      subject_id: first.id,
+      decision: 'rejected',
+      actor: 'dev@example.com',
+      channel: 'claude-code',
+      reason: 'asserts the wrong status',
+      seen_hash: first.content_hash,
+    });
+    assert.equal(await criterionState(criterion.id), 'uncovered');
+
+    const second = await draftCase(criterion.id, 'second attempt');
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    // Gate 1's approval is still valid - `uncovered` only ever meant "no live
+    // test case", and there is one again.
+    assert.equal(await criterionState(criterion.id), 'approved');
+  });
+
+  it('still refuses a draft against a criterion gate 1 has not approved', async () => {
+    const { requirement } = await seedRequirement('RD2-2');
+    const criterion = (
+      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'unapproved rule' }] })
+    ).body.criteria[0];
+
+    const res = await draftCase(criterion.id, 'too early');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.event, 'criterion_not_approved');
   });
 });
 
