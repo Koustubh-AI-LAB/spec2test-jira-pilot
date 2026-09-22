@@ -8,10 +8,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
+    "prompts:lock": "node --experimental-strip-types src/prompts.ts --lock"
   },
   "engines": {
     "node": ">=22.9"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
