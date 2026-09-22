@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { getPool } from '../db/pool.ts';
@@ -15,6 +17,8 @@ import { loadFieldMap, validateFieldMap } from '../jira/read.ts';
 import { postCriteria, postDrift, postRefusal, postVerification } from '../jira/write.ts';
 import type { CriterionView } from '../jira/write.ts';
 import { runOnce } from '../worker/index.ts';
+import { runRunnerCli } from '../worker/runnerCli.ts';
+import type { SpecValidationResult } from '../runner/types.ts';
 import { computeVerification } from '../verification.ts';
 import { pipelineState } from '../pipeline.ts';
 
@@ -37,8 +41,14 @@ function isUuid(value: string): boolean {
  *    /jira/:issueKey/verification and /test-cases/:id/verify - were added to
  *    version 1 without a bump, which is why this jumps rather than tracking
  *    each one.)
+ * 3: adds GET /projects/:key, POST /specs/validate, and two fields the
+ *    plugin CLI needs on GET /pipeline/:issueKey's response -
+ *    jira.summary/jira.requirementText (so the CLI can post the ticket's
+ *    text to POST /requirements verbatim, never paraphrased) and
+ *    testCases[].verified (not derivable from testCases[].state - see
+ *    PipelineState's doc comment in pipeline.ts).
  */
-export const API_VERSION = 2;
+export const API_VERSION = 3;
 
 interface Provenance {
   drafted_by_model: string;
@@ -93,6 +103,19 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
        RETURNING *`,
       [b.key, b.jira_project_key, b.target_repo_path ?? ''],
     );
+    return rows[0];
+  });
+
+  /**
+   * A read, so a CLI resolving the project uuid it needs for
+   * POST /requirements and GET /environments/resolve never has to go through
+   * POST /projects - that route is an upsert, and a read must not require a
+   * write.
+   */
+  app.get('/projects/:key', async (req) => {
+    const { key } = req.params as { key: string };
+    const { rows } = await pool.query('SELECT * FROM project WHERE key = $1', [key]);
+    if (!rows[0]) throw new ServiceError('not_found', `project "${key}" not found`, 404);
     return rows[0];
   });
 
@@ -167,6 +190,52 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       );
     }
     return { environmentId: id, source: env.openapi_url, text, contentHash: contentHash(text) };
+  });
+
+  /**
+   * Grounds a drafted TestCaseSpec before it becomes a test_case row sitting
+   * at Gate 2 - the same `validate-spec` stage `runOnce` (worker/index.ts)
+   * runs first, exposed standalone so the plugin CLI's `draft-test-case` can
+   * refuse an ungrounded spec at draft time rather than discovering it as a
+   * puzzling failure minutes later. Never writes to Postgres; this route is
+   * a pure check.
+   */
+  app.post('/specs/validate', async (req) => {
+    const b = req.body as { environment_id: string; spec: unknown };
+    if (!isUuid(b.environment_id)) {
+      throw new ServiceError('not_found', `environment ${b.environment_id} not found`, 404);
+    }
+
+    const { rows } = await pool.query<{ openapi_url: string }>(
+      'SELECT openapi_url FROM environment WHERE id = $1',
+      [b.environment_id],
+    );
+    const env = rows[0];
+    if (!env) throw new ServiceError('not_found', `environment ${b.environment_id} not found`, 404);
+    if (!env.openapi_url) {
+      throw new ServiceError(
+        'openapi_not_configured',
+        `environment ${b.environment_id} has no openapi_url - register it with the path to the target's OpenAPI document`,
+        409,
+      );
+    }
+
+    const workDir = mkdtempSync(join(tmpdir(), 'spec2test-validate-'));
+    try {
+      const specPath = join(workDir, 'spec.json');
+      writeFileSync(specPath, JSON.stringify(b.spec), 'utf8');
+      const res = runRunnerCli<SpecValidationResult>(['validate-spec', specPath, env.openapi_url]);
+      if (!res.ok) {
+        throw new ServiceError(
+          res.error?.event ?? 'runner_cli_crashed',
+          res.error?.message ?? 'validate-spec crashed with no message',
+          502,
+        );
+      }
+      return res.result!;
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   app.post('/requirements', async (req) => {

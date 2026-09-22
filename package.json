@@ -5,7 +5,8 @@
   "description": "Jira to Claude Code QA pipeline: requirement in, proven test out, status back on the ticket.",
   "workspaces": [
     "service",
-    "runner"
+    "runner",
+    "plugin/cli"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",

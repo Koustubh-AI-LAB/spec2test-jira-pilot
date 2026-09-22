@@ -12,9 +12,9 @@ import { postCriteria, postDrift, postRefusal, postVerification } from '../src/j
 import type { PostCriteriaInput, PostVerificationInput } from '../src/jira/write.ts';
 import { fakeJira } from './helpers/fake-jira.ts';
 import type { FakeJira } from './helpers/fake-jira.ts';
+import { useTestDatabase } from './helpers/db.ts';
 
-process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localhost:5435/spec2test';
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+await useTestDatabase();
 
 const ISSUE = 'FAKE-1';
 

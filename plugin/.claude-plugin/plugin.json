@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "spec2test",
+  "version": "0.1.0",
+  "description": "Jira to Claude Code QA pipeline: requirement in, proven test out, status back on the ticket.",
+  "skills": [
+    "./skills/pipeline"
+  ]
+}

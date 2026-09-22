@@ -10,25 +10,22 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { buildServer } from '../src/api/server.ts';
 import { computeVerification } from '../src/verification.ts';
+import { loadDotEnvExceptDatabase } from './helpers/db.ts';
 
-for (const path of ['../.env', '.env']) {
-  if (!existsSync(path)) continue;
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2];
-  }
-  break;
-}
-
-process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localhost:5435/spec2test';
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+// Loads .env for CONDUIT_BASE_URL/CONDUIT_REPO_PATH etc. - never for
+// DATABASE_URL/MIGRATION_DATABASE_URL, which are always the dedicated test
+// database regardless of what .env says. See helpers/db.ts: before this, a
+// real .env silently pointed this file's rows at the same database a live
+// session uses, which is how six stray P-WORKER* project rows ended up
+// sitting alongside S2T-1's real local requirement.
+await loadDotEnvExceptDatabase();
 
 const live = Boolean(process.env.CONDUIT_BASE_URL);
 const targetRepoRoot = process.env.CONDUIT_REPO_PATH ?? '';

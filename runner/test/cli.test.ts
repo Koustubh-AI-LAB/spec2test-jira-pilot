@@ -109,6 +109,33 @@ describe('runner CLI', () => {
     }
   });
 
+  it('validate-spec: ok:true plus hints for a grounded spec whose check cannot derive a kill fault', () => {
+    // Grounding alone would pass this spec and it would generate a
+    // green-looking test - but falsification could never certify it, since
+    // no kill fault can be derived from this check. See
+    // unparseableAssertionHints's doc comment (deriveKillFaults.ts) and
+    // PLAN-5.3-5.7-WALKING-SKELETON.md 0.3.
+    const dir = mkdtempSync(join(tmpdir(), 'spec2test-cli-'));
+    try {
+      const spec = {
+        ...registerSpec,
+        assertions: [
+          { name: 'status_201', check: 'status === 201' },
+          { name: 'exact_snapshot', check: 'JSON.stringify(body) === "{}"' },
+        ],
+      };
+      const specPath = writeSpecFile(dir, spec);
+      const { status, stdout } = runCli(['validate-spec', specPath, OPENAPI]);
+      assert.equal(status, 0);
+      const result = stdout as { ok: boolean; hints?: string[] };
+      assert.equal(result.ok, true);
+      assert.equal(result.hints?.length, 1);
+      assert.match(result.hints![0]!, /"exact_snapshot"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('generate: writes the file and reports its content hash, exit 0', () => {
     const dir = mkdtempSync(join(tmpdir(), 'spec2test-cli-'));
     try {
