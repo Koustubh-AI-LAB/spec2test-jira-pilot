@@ -12,7 +12,6 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { JiraClient, loadConfig } from '../src/jira/client.ts';
@@ -20,19 +19,12 @@ import { fetchTicket, loadFieldMap, validateFieldMap, VERIFICATION_STATUS } from
 import { reconcile } from '../src/jira/reconcile.ts';
 import { postCriteria, readProperty } from '../src/jira/write.ts';
 import { contentHash } from '../src/hash.ts';
+import { loadDotEnvExceptDatabase } from './helpers/db.ts';
 
-// .env is the only place the token lives; it is gitignored.
-for (const path of ['../.env', '.env']) {
-  if (!existsSync(path)) continue;
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2];
-  }
-  break;
-}
-
-process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localhost:5435/spec2test';
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+// .env is the only place the token lives; it is gitignored. Loads everything
+// except DATABASE_URL/MIGRATION_DATABASE_URL, which are always the dedicated
+// test database regardless of what .env says - see helpers/db.ts.
+await loadDotEnvExceptDatabase();
 
 const ISSUE = process.env.JIRA_TEST_ISSUE ?? 'S2T-1';
 const live = Boolean(process.env.JIRA_API_TOKEN);

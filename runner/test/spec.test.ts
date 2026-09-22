@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadOpenApiSchema, isGrounded, missingRequiredBodyFields } from '../src/spec/openapi.ts';
 import { validateSpec } from '../src/spec/validateSpec.ts';
+import { parseCheck, unparseableAssertionHints } from '../src/faultinjection/deriveKillFaults.ts';
 import { RunnerError } from '../src/errors.ts';
 import type { TestCaseSpec } from '../src/spec/types.ts';
 
@@ -271,5 +272,54 @@ describe('validateSpec', () => {
       assert.equal(err.event, 'spec_missing_assertions');
       return true;
     });
+  });
+});
+
+// See PLAN-5.3-5.7-WALKING-SKELETON.md 0.3: unparseableAssertionHints is what
+// lets validate-spec (runner/src/cli.ts) surface, at draft time, an assertion
+// that will silently derive zero kill faults - the same shape
+// brittle-login-snapshot.json's own fixture exercises live, but never had a
+// unit test naming why.
+describe('unparseableAssertionHints', () => {
+  it('is empty for every recognised check form', () => {
+    const spec: TestCaseSpec = {
+      ...grounded,
+      assertions: [
+        { name: 'status_201', check: 'status === 201' },
+        { name: 'has_token', check: 'body.user.token' },
+        { name: 'email_matches', check: "body.user.email === 'x@example.com'" },
+      ],
+    };
+    assert.deepEqual(unparseableAssertionHints(spec), []);
+  });
+
+  it('names an assertion whose check parseCheck cannot parse, and says why', () => {
+    const spec: TestCaseSpec = {
+      ...grounded,
+      assertions: [
+        { name: 'status_201', check: 'status === 201' },
+        { name: 'exact_snapshot', check: 'JSON.stringify(body) === "{}"' },
+      ],
+    };
+    assert.equal(parseCheck('JSON.stringify(body) === "{}"'), undefined, 'premise: this form is unparseable');
+    const hints = unparseableAssertionHints(spec);
+    assert.equal(hints.length, 1);
+    assert.match(hints[0]!, /"exact_snapshot"/);
+    assert.match(hints[0]!, /cannot derive a kill fault/);
+    assert.match(hints[0]!, /quarantined/);
+  });
+
+  it('names every unparseable assertion, not just the first', () => {
+    const spec: TestCaseSpec = {
+      ...grounded,
+      assertions: [
+        { name: 'a', check: 'JSON.stringify(body) === "{}"' },
+        { name: 'b', check: 'body.user.token.length > 10' },
+      ],
+    };
+    const hints = unparseableAssertionHints(spec);
+    assert.equal(hints.length, 2);
+    assert.ok(hints.some((h) => h.includes('"a"')));
+    assert.ok(hints.some((h) => h.includes('"b"')));
   });
 });

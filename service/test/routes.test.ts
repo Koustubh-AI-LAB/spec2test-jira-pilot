@@ -16,9 +16,9 @@ import { contentHash } from '../src/hash.ts';
 import { reconcile } from '../src/jira/reconcile.ts';
 import { fakeJira } from './helpers/fake-jira.ts';
 import type { FakeJira } from './helpers/fake-jira.ts';
+import { useTestDatabase } from './helpers/db.ts';
 
-process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localhost:5435/spec2test';
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+await useTestDatabase();
 
 const ISSUE = 'FAKE-1';
 const PROVENANCE = {
@@ -77,6 +77,108 @@ describe('API version', () => {
     // preflight, so the number has to have moved.
     assert.ok(API_VERSION >= 2, `API_VERSION is still ${API_VERSION}`);
     assert.equal((await send('GET', '/version')).body.apiVersion, API_VERSION);
+  });
+});
+
+describe('GET /projects/:key', () => {
+  it('reads back a project by its key, without upserting anything', async () => {
+    const created = await project();
+    const res = await send('GET', `/projects/${created.key}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.id, created.id);
+    assert.equal(res.body.jira_project_key, created.jira_project_key);
+  });
+
+  it('404s a key nothing was ever registered under', async () => {
+    const res = await send('GET', '/projects/NO-SUCH-PROJECT');
+    assert.equal(res.status, 404);
+    assert.equal(res.body.event, 'not_found');
+  });
+});
+
+describe('POST /specs/validate', () => {
+  it('passes a spec that names a documented route', async () => {
+    const path = join(scratch, 'grounded.yml');
+    writeFileSync(path, 'openapi: 3.0.0\npaths:\n  /api/articles:\n    get: {}\n');
+    const env = await environment((await project()).id, 'http://localhost:4000', path);
+
+    const res = await send('POST', '/specs/validate', {
+      environment_id: env.id,
+      spec: {
+        criterionId: 'c1',
+        name: 'list articles',
+        method: 'GET',
+        path: '/api/articles',
+        auth: 'none',
+        assertions: [{ name: 'status_200', check: 'status === 200' }],
+      },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+  });
+
+  it('refuses a spec naming a route the schema does not document, before any file is written', async () => {
+    const path = join(scratch, 'narrow.yml');
+    writeFileSync(path, 'openapi: 3.0.0\npaths: {}\n');
+    const env = await environment((await project()).id, 'http://localhost:4001', path);
+
+    const res = await send('POST', '/specs/validate', {
+      environment_id: env.id,
+      spec: {
+        criterionId: 'c1',
+        name: 'invented route',
+        method: 'GET',
+        path: '/api/does-not-exist',
+        auth: 'none',
+        assertions: [{ name: 'status_200', check: 'status === 200' }],
+      },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.event, 'spec_not_grounded');
+  });
+
+  it('404s an unknown environment, and a malformed id rather than reaching Postgres', async () => {
+    const spec = { criterionId: 'c1', name: 'n', method: 'GET', path: '/x', auth: 'none', assertions: [] };
+    const unknown = await send('POST', '/specs/validate', {
+      environment_id: '00000000-0000-4000-8000-000000000000',
+      spec,
+    });
+    assert.equal(unknown.status, 404);
+    const malformed = await send('POST', '/specs/validate', { environment_id: 'not-a-uuid', spec });
+    assert.equal(malformed.status, 404, 'a malformed id reached Postgres');
+  });
+
+  it('409s an environment with no openapi_url configured', async () => {
+    const env = await environment((await project()).id, 'http://localhost:4002');
+    const res = await send('POST', '/specs/validate', {
+      environment_id: env.id,
+      spec: { criterionId: 'c1', name: 'n', method: 'GET', path: '/x', auth: 'none', assertions: [] },
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.event, 'openapi_not_configured');
+  });
+
+  it('never writes to Postgres - it is a pure check', async () => {
+    const path = join(scratch, 'pure.yml');
+    writeFileSync(path, 'openapi: 3.0.0\npaths:\n  /api/articles:\n    get: {}\n');
+    const env = await environment((await project()).id, 'http://localhost:4003', path);
+    const before = (await getPool().query('SELECT count(*) FROM test_case')).rows[0].count;
+
+    await send('POST', '/specs/validate', {
+      environment_id: env.id,
+      spec: {
+        criterionId: 'c1',
+        name: 'n',
+        method: 'GET',
+        path: '/api/articles',
+        auth: 'none',
+        assertions: [{ name: 'a', check: 'status === 200' }],
+      },
+    });
+
+    const after = (await getPool().query('SELECT count(*) FROM test_case')).rows[0].count;
+    assert.equal(after, before);
   });
 });
 

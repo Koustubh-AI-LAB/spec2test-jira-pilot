@@ -20,8 +20,9 @@ import type { StageInputs } from '../src/pipeline.ts';
 import { fakeJira } from './helpers/fake-jira.ts';
 import type { FakeJira } from './helpers/fake-jira.ts';
 
-process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localhost:5435/spec2test';
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+import { useTestDatabase } from './helpers/db.ts';
+
+await useTestDatabase();
 
 // --- the pure table -------------------------------------------------------
 
@@ -425,5 +426,92 @@ describe('pipelineState: sequences that broke elsewhere', () => {
       requirementId,
     ]);
     assert.equal(await stage(jira), 'verifying');
+  });
+});
+
+// --- fields the plugin CLI needs (5.3-5.7 step 0.2) ------------------------
+
+describe('pipelineState: jira.summary and jira.requirementText', () => {
+  it('carries the ticket text verbatim, not the drafted requirement title/body', async () => {
+    const jira = fakeJira({ key: ISSUE, summary: 'loans', description: 'a member may hold 3 books', changelog: [] });
+    await seedRequirement('a different drafted title', 'a different drafted body');
+
+    const observed = await pipelineState(jira.client, ISSUE);
+    // The CLI posts these fields verbatim to POST /requirements - if this ever
+    // read from the local requirement row instead of the live ticket, a
+    // paraphrase could drift from contentHash(ticket.requirementText) on the
+    // very next reconcile without anyone noticing until Gate 1 mysteriously
+    // reopened.
+    assert.equal(observed.jira.summary, 'loans');
+    assert.equal(observed.jira.requirementText, 'loans\n\na member may hold 3 books');
+  });
+
+  it('is an empty string, not undefined, for a ticket with no summary or description', async () => {
+    // requirementText() filters out blank parts before joining (adf.ts), so
+    // this is '' rather than '\n\n' - asserted here because pipeline.ts's own
+    // `?? ''` fallback would otherwise mask either behavior identically.
+    const jira = fakeJira({ key: ISSUE, summary: '', description: '', changelog: [] });
+    const observed = await pipelineState(jira.client, ISSUE);
+    assert.equal(observed.jira.summary, '');
+    assert.equal(observed.jira.requirementText, '');
+  });
+});
+
+describe('pipelineState: testCases[].verified', () => {
+  async function registerEnvironment() {
+    const project = await call('POST', '/projects', { key: 'FAKE-PILOT', jira_project_key: 'FAKE' });
+    return call('POST', '/environments', {
+      project_id: project.id,
+      base_url: 'http://localhost:9999',
+      class: 'ephemeral',
+    }) as Promise<{ id: string }>;
+  }
+
+  it('is false for an approved test case no falsification run has touched', async () => {
+    const jira = fakeJira({ key: ISSUE, summary: 't', description: 'b', changelog: [] });
+    const hash = await seedRequirement('t', 'b');
+    const [criterion] = await addCriteria(['rule']);
+    await present(jira, hash);
+    jira.setVerificationStatus('Criteria Approved', '2026-09-11T11:00:00.000+0530');
+    await reconcile(jira.client, ISSUE);
+    const testCase = await draftCase(criterion!.id, 'case');
+    await gate2(testCase, 'approved');
+
+    const observed = await pipelineState(jira.client, ISSUE);
+    assert.equal(observed.testCases[0]!.verified, false);
+  });
+
+  it('is true once a falsification run has produced fault_experiment rows for it - not derivable from state alone', async () => {
+    const jira = fakeJira({ key: ISSUE, summary: 't', description: 'b', changelog: [] });
+    const hash = await seedRequirement('t', 'b');
+    const [criterion] = await addCriteria(['rule']);
+    await present(jira, hash);
+    jira.setVerificationStatus('Criteria Approved', '2026-09-11T11:00:00.000+0530');
+    await reconcile(jira.client, ISSUE);
+    const testCase = await draftCase(criterion!.id, 'case');
+    await gate2(testCase, 'approved');
+
+    const env = await registerEnvironment();
+    // Same shape persistComplete (worker/index.ts) writes on a real
+    // certified run - inserted directly here so this test exercises the
+    // pipeline route's read-side derivation without needing a live target.
+    const { rows: runRows } = await getPool().query<{ id: string }>(
+      `INSERT INTO run (requirement_id, environment_id, kind, state, started_at, finished_at)
+       VALUES ($1, $2, 'falsification', 'complete', now(), now())
+       RETURNING id`,
+      [requirementId, env.id],
+    );
+    await getPool().query(
+      `INSERT INTO fault_experiment
+         (run_id, criterion_id, test_case_id, set_kind, tier, spec, plausible, verdict, detail)
+       VALUES ($1, $2, $3, 'kill', 1, '{}', true, 'kill', 'ok')`,
+      [runRows[0]!.id, criterion!.id, testCase.id],
+    );
+
+    const observed = await pipelineState(jira.client, ISSUE);
+    // state is untouched by verification (see certify.ts's doc comment) -
+    // this assertion is the whole point of the field.
+    assert.equal(observed.testCases[0]!.state, 'approved');
+    assert.equal(observed.testCases[0]!.verified, true);
   });
 });

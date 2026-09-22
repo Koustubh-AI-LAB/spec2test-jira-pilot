@@ -11,10 +11,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { postVerification } from '../src/jira/write.ts';
 import { fakeJira } from './helpers/fake-jira.ts';
+import { useTestDatabase } from './helpers/db.ts';
 
 // postVerification calls audit(), which needs a real Postgres connection -
-// nothing else here touches the database.
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+// nothing else here touches the database. Relies on an earlier-run test file
+// (alphabetically, gates.test.ts) having already migrated spec2test_test in
+// this same `npm test` invocation.
+await useTestDatabase();
 
 const ISSUE = 'VERIFY-1';
 const FIELDS = {

@@ -183,11 +183,36 @@ export interface PipelineState {
     stateAffecting: boolean;
     contentHash: string;
   }[];
-  testCases: { id: string; criterionId: string; name: string; state: string; contentHash: string }[];
+  testCases: {
+    id: string;
+    criterionId: string;
+    name: string;
+    state: string;
+    contentHash: string;
+    /**
+     * True iff a falsification run has produced `fault_experiment` rows for
+     * this test case. Not derivable from `state` alone - `test_case.state`'s
+     * CHECK constraint has no certified/verified value; `certify.ts` records
+     * the verdict on `requirement.state` only, by design, so a test case
+     * reads `approved` both before and after verification. Without this
+     * field the plugin CLI could not tell "not yet verified" from "verified
+     * and rolled up," and `needs_verification` would re-verify forever.
+     */
+    verified: boolean;
+  }[];
   /** Present only at `criteria_rejected`: the PO's own comment, for the redraft. */
   rejectionReason?: string;
   reconcile: { action: ReconcileAction; detail: string };
-  jira: { verificationStatus: string | undefined; criteriaPosted: boolean };
+  jira: {
+    verificationStatus: string | undefined;
+    criteriaPosted: boolean;
+    /** Verbatim from the ticket - see TicketSnapshot.summary/requirementText.
+     *  The plugin CLI copies these into POST /requirements untouched, never
+     *  paraphrased, so contentHash(requirementText) keeps matching what
+     *  reconcile compares against on every later call. */
+    summary: string;
+    requirementText: string;
+  };
 }
 
 /**
@@ -253,6 +278,22 @@ export async function pipelineState(client: JiraClient, issueKey: string): Promi
       ).rows.length > 0
     : false;
 
+  // Same join verification.ts's computeVerification uses per test case
+  // (run -> fault_experiment), batched once per requirement rather than once
+  // per test case. See the `verified` field's doc comment on PipelineState.
+  const verifiedIds = requirement
+    ? new Set(
+        (
+          await pool.query<{ test_case_id: string }>(
+            `SELECT DISTINCT fe.test_case_id
+               FROM run r JOIN fault_experiment fe ON fe.run_id = r.id
+              WHERE r.requirement_id = $1 AND r.kind = 'falsification'`,
+            [requirement.id],
+          )
+        ).rows.map((r) => r.test_case_id),
+      )
+    : new Set<string>();
+
   const criteriaPosted = requirement
     ? criteriaArePosted(result.ticket?.property, requirement, criteria)
     : false;
@@ -302,9 +343,15 @@ export async function pipelineState(client: JiraClient, issueKey: string): Promi
       name: t.name,
       state: t.state,
       contentHash: t.content_hash,
+      verified: verifiedIds.has(t.id),
     })),
     ...(rejectionReason !== undefined ? { rejectionReason } : {}),
     reconcile: { action: result.action, detail: result.detail },
-    jira: { verificationStatus: result.ticket?.verificationStatus, criteriaPosted },
+    jira: {
+      verificationStatus: result.ticket?.verificationStatus,
+      criteriaPosted,
+      summary: result.ticket?.summary ?? '',
+      requirementText: result.ticket?.requirementText ?? '',
+    },
   };
 }

@@ -15,9 +15,9 @@ import { migrate } from '../src/db/migrate.ts';
 import { buildServer } from '../src/api/server.ts';
 import { contentHash } from '../src/hash.ts';
 import type { FastifyInstance } from 'fastify';
+import { useTestDatabase } from './helpers/db.ts';
 
-process.env.MIGRATION_DATABASE_URL ??= 'postgresql://spec2test:spec2test@localhost:5435/spec2test';
-process.env.DATABASE_URL ??= 'postgresql://spec2test_app:spec2test_app@localhost:5435/spec2test';
+await useTestDatabase();
 
 let app: FastifyInstance;
 

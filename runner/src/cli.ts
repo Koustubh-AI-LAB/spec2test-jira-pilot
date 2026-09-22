@@ -7,6 +7,7 @@ import { validate } from './validator/index.ts';
 import { validateSpec } from './spec/validateSpec.ts';
 import { loadOpenApiSchema } from './spec/openapi.ts';
 import { runFalsification } from './faultinjection/runFalsification.ts';
+import { unparseableAssertionHints } from './faultinjection/deriveKillFaults.ts';
 import { runPlaywright } from './validator/runPlaywright.ts';
 import type { TestCaseSpec } from './spec/types.ts';
 import { RunnerError } from './errors.ts';
@@ -102,7 +103,11 @@ function main(): void {
       emit(
         asResult(() => {
           validateSpec(spec, schema);
-          return { ok: true };
+          // Grounding passed. Still worth flagging an assertion that will
+          // derive zero kill faults - see unparseableAssertionHints's doc
+          // comment - before the plugin CLI drafts this into a test_case row.
+          const hints = unparseableAssertionHints(spec);
+          return hints.length > 0 ? { ok: true, hints } : { ok: true };
         }),
       );
       break;

@@ -14,7 +14,7 @@ import type { FaultSpec } from './types.ts';
  * rather than guessing at a fault for a check expression it doesn't
  * recognise.
  */
-function parseCheck(check: string): { statusValue: number } | { path: string[] } | undefined {
+export function parseCheck(check: string): { statusValue: number } | { path: string[] } | undefined {
   const statusMatch = /^status\s*===\s*(\d+)\s*$/.exec(check);
   if (statusMatch) return { statusValue: Number(statusMatch[1]) };
 
@@ -25,6 +25,28 @@ function parseCheck(check: string): { statusValue: number } | { path: string[] }
   if (eqMatch) return { path: eqMatch[1]!.split('.').filter(Boolean) };
 
   return undefined;
+}
+
+/**
+ * Named for `validate-spec` (runner/src/cli.ts) to surface at draft time,
+ * before generate/validate/falsify ever run: an assertion whose `check`
+ * `parseCheck` cannot parse derives zero kill faults. The spec still passes
+ * grounding and generates a green-looking test, but falsification will
+ * quarantine the criterion with no assertion ever exercised -
+ * `brittle-login-snapshot.json` is this shape on purpose. Surfacing it here
+ * turns a silent, minutes-later quarantine into an immediate hint the LLM
+ * (or a human) can act on while still drafting.
+ */
+export function unparseableAssertionHints(spec: TestCaseSpec): string[] {
+  return spec.assertions
+    .filter((a) => parseCheck(a.check) === undefined)
+    .map(
+      (a) =>
+        `assertion "${a.name}" (check: ${a.check}) cannot derive a kill fault - only ` +
+        `"status === <n>", "body.a.b" and "body.a.b === <expr>" are recognised. ` +
+        'this assertion will never be exercised by falsification, and a criterion ' +
+        'whose every assertion is like this will be quarantined, never certified.',
+    );
 }
 
 function pickAlternateStatus(schema: OpenApiDoc, spec: TestCaseSpec, original: number): { value: number; plausible: boolean } {
