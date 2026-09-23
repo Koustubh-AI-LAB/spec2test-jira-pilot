@@ -97,6 +97,23 @@ async function hasRunningJob(requirementId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * Every test case under `requirementId` that has ever been through a
+ * falsification run - not "certified" (see `isCriterionCovered` below,
+ * which is a stricter, different question). Shared so `pipeline.ts`'s
+ * `testCases[].verified` field can't independently drift from what this
+ * module considers "attempted."
+ */
+export async function verifiedTestCaseIds(requirementId: string): Promise<Set<string>> {
+  const { rows } = await getPool().query<{ test_case_id: string }>(
+    `SELECT DISTINCT fe.test_case_id
+       FROM run r JOIN fault_experiment fe ON fe.run_id = r.id
+      WHERE r.requirement_id = $1 AND r.kind = 'falsification'`,
+    [requirementId],
+  );
+  return new Set(rows.map((r) => r.test_case_id));
+}
+
 async function isCriterionCovered(criterionId: string): Promise<boolean> {
   const { rows: testCases } = await getPool().query<TestCaseRow>(
     `SELECT id FROM test_case WHERE criterion_id = $1 AND state = 'approved'`,

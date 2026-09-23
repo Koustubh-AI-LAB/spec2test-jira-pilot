@@ -12,12 +12,13 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { Client } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { buildServer } from '../src/api/server.ts';
 import { computeVerification } from '../src/verification.ts';
-import { loadDotEnvExceptDatabase } from './helpers/db.ts';
+import { loadDotEnvExceptDatabase, TEST_DATABASE_URL } from './helpers/db.ts';
 
 // Loads .env for CONDUIT_BASE_URL/CONDUIT_REPO_PATH etc. - never for
 // DATABASE_URL/MIGRATION_DATABASE_URL, which are always the dedicated test
@@ -49,6 +50,28 @@ const PROVENANCE = {
   temperature: 0,
 };
 
+/**
+ * `describe`'s own `skip` only guards on CONDUIT_BASE_URL - it says nothing
+ * about Postgres. Without this, an unreachable Postgres surfaces as `pg`'s
+ * pool raising a connection error outside this hook's own promise chain,
+ * which crashes the whole test file's process instead of failing this one
+ * `describe` cleanly. A short, isolated connectivity probe first turns that
+ * into an ordinary hook failure `node:test` can attribute normally - same
+ * pattern as helpers/db.ts's `ensureTestDatabaseExists`.
+ */
+async function assertPostgresReachable(): Promise<void> {
+  const client = new Client({ connectionString: TEST_DATABASE_URL, connectionTimeoutMillis: 5_000 });
+  try {
+    await client.connect();
+  } catch (err) {
+    throw new Error(
+      `Postgres unreachable at ${TEST_DATABASE_URL} - run "docker compose up -d postgres" first: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL not set' }, () => {
   let environmentId: string;
 
@@ -56,6 +79,7 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     if (!targetRepoRoot) throw new Error('CONDUIT_BASE_URL is set but CONDUIT_REPO_PATH is not');
     if (!existsSync(spec2testDir)) throw new Error(`${spec2testDir} does not exist - run runner's init first`);
 
+    await assertPostgresReachable();
     await migrate();
     await getAdminPool().query('TRUNCATE project, audit_event RESTART IDENTITY CASCADE');
     app = buildServer();

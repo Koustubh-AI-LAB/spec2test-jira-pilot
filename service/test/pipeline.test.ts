@@ -195,6 +195,7 @@ const PROVENANCE = {
 };
 let app: FastifyInstance;
 let requirementId: string;
+let projectId: string;
 
 before(async () => {
   await migrate();
@@ -204,6 +205,12 @@ before(async () => {
 
 beforeEach(async () => {
   await getAdminPool().query('TRUNCATE project, audit_event RESTART IDENTITY CASCADE');
+  // Every pipelineState call below is scoped by project - see pipeline.ts's
+  // doc comment on why the resume lookup must not be a bare jira_issue_key
+  // match. Created once per test, before anything else, so `stage(jira)` can
+  // be called even before a requirement exists.
+  const project = await call('POST', '/projects', { key: 'FAKE-PILOT', jira_project_key: 'FAKE' });
+  projectId = project.id;
 });
 
 after(async () => {
@@ -219,7 +226,6 @@ async function call(method: 'GET' | 'POST', url: string, payload?: object) {
 
 /** A requirement drafted from the fake ticket's own text, so hashes line up. */
 async function seedRequirement(summary: string, description: string) {
-  const project = await call('POST', '/projects', { key: 'FAKE-PILOT', jira_project_key: 'FAKE' });
   const hash = contentHash(`${summary}\n\n${description}`);
   const { rows } = await getPool().query(
     `INSERT INTO requirement
@@ -227,7 +233,7 @@ async function seedRequirement(summary: string, description: string) {
         drafted_by_model, prompt_version, grounding_hash, temperature)
      VALUES ($1,$2,$3,$4,$5,'awaiting_requirement_approval','claude-opus-5','draft-v1',$5,0)
      RETURNING id`,
-    [project.id, ISSUE, summary, description, hash],
+    [projectId, ISSUE, summary, description, hash],
   );
   requirementId = rows[0].id;
   return hash;
@@ -277,7 +283,7 @@ async function gate2(testCase: { id: string; content_hash: string }, decision: '
   });
 }
 
-const stage = async (jira: FakeJira) => (await pipelineState(jira.client, ISSUE)).stage;
+const stage = async (jira: FakeJira) => (await pipelineState(jira.client, ISSUE, projectId)).stage;
 
 describe('pipelineState: the happy path, one stage at a time', () => {
   it('walks from nothing to needs_verification, and never writes while looking', async () => {
@@ -297,7 +303,7 @@ describe('pipelineState: the happy path, one stage at a time', () => {
     // The PO approves in Jira. Looking at the pipeline must NOT apply it.
     jira.setVerificationStatus('Criteria Approved', '2026-09-11T11:00:00.000+0530');
     const writesBefore = jira.writes.length;
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(observed.stage, 'gate1_decision_unapplied', observed.reconcile.detail);
     assert.equal(jira.writes.length, writesBefore, 'looking at the pipeline wrote to Jira');
     assert.equal(observed.criteria[0]!.state, 'proposed', 'looking at the pipeline mutated a criterion');
@@ -329,7 +335,7 @@ describe('pipelineState: sequences that broke elsewhere', () => {
     jira.setVerificationStatus('Contract-Verified', '2026-09-11T12:00:00.000+0530');
     await getAdminPool().query(`UPDATE requirement SET state = 'contract_verified' WHERE id = $1`, [requirementId]);
 
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(observed.reconcile.action, 'gate1_pending', 'premise: reconcile misreads a post-gate-1 status');
     assert.equal(observed.stage, 'contract_verified');
   });
@@ -343,7 +349,7 @@ describe('pipelineState: sequences that broke elsewhere', () => {
     await reconcile(jira.client, ISSUE);
 
     jira.editSummary('v2', '2026-09-11T12:00:00.000+0530');
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(observed.stage, 'stale');
     assert.equal(observed.criteria[0]!.state, 'approved', 'looking at drift mutated the criterion');
 
@@ -380,7 +386,7 @@ describe('pipelineState: sequences that broke elsewhere', () => {
     jira.setVerificationStatus('Criteria Rejected', '2026-09-11T10:10:00.000+0530');
     await reconcile(jira.client, ISSUE);
 
-    const rejected = await pipelineState(jira.client, ISSUE);
+    const rejected = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(rejected.stage, 'criteria_rejected');
     assert.match(rejected.rejectionReason ?? '', /401/);
 
@@ -390,7 +396,7 @@ describe('pipelineState: sequences that broke elsewhere', () => {
       ...PROVENANCE,
     });
     // Jira still says "Criteria Rejected" here.
-    const afterRedraft = await pipelineState(jira.client, ISSUE);
+    const afterRedraft = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(afterRedraft.jira.verificationStatus, 'Criteria Rejected', 'premise');
     assert.equal(afterRedraft.stage, 'needs_criteria_posting');
     assert.equal(afterRedraft.rejectionReason, undefined, 'a stale rejection reason leaked into a later stage');
@@ -436,7 +442,7 @@ describe('pipelineState: jira.summary and jira.requirementText', () => {
     const jira = fakeJira({ key: ISSUE, summary: 'loans', description: 'a member may hold 3 books', changelog: [] });
     await seedRequirement('a different drafted title', 'a different drafted body');
 
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     // The CLI posts these fields verbatim to POST /requirements - if this ever
     // read from the local requirement row instead of the live ticket, a
     // paraphrase could drift from contentHash(ticket.requirementText) on the
@@ -451,7 +457,7 @@ describe('pipelineState: jira.summary and jira.requirementText', () => {
     // this is '' rather than '\n\n' - asserted here because pipeline.ts's own
     // `?? ''` fallback would otherwise mask either behavior identically.
     const jira = fakeJira({ key: ISSUE, summary: '', description: '', changelog: [] });
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(observed.jira.summary, '');
     assert.equal(observed.jira.requirementText, '');
   });
@@ -477,7 +483,7 @@ describe('pipelineState: testCases[].verified', () => {
     const testCase = await draftCase(criterion!.id, 'case');
     await gate2(testCase, 'approved');
 
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     assert.equal(observed.testCases[0]!.verified, false);
   });
 
@@ -508,10 +514,48 @@ describe('pipelineState: testCases[].verified', () => {
       [runRows[0]!.id, criterion!.id, testCase.id],
     );
 
-    const observed = await pipelineState(jira.client, ISSUE);
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
     // state is untouched by verification (see certify.ts's doc comment) -
     // this assertion is the whole point of the field.
     assert.equal(observed.testCases[0]!.state, 'approved');
     assert.equal(observed.testCases[0]!.verified, true);
+  });
+
+  it('is per-test-case, not per-criterion - a mix of verified and never-run test cases on the same criterion never blur together', async () => {
+    // Pins verification.ts's verifiedTestCaseIds, the helper pipeline.ts was
+    // extracted to call instead of independently duplicating this join - a
+    // fixture with one certified case and one never-run case on the SAME
+    // criterion is exactly the shape that would expose the two
+    // implementations disagreeing if they ever drifted apart again.
+    const jira = fakeJira({ key: ISSUE, summary: 't', description: 'b', changelog: [] });
+    const hash = await seedRequirement('t', 'b');
+    const [criterion] = await addCriteria(['rule']);
+    await present(jira, hash);
+    jira.setVerificationStatus('Criteria Approved', '2026-09-11T11:00:00.000+0530');
+    await reconcile(jira.client, ISSUE);
+
+    const verifiedCase = await draftCase(criterion!.id, 'verified case');
+    await gate2(verifiedCase, 'approved');
+    const neverRunCase = await draftCase(criterion!.id, 'never-run case');
+    await gate2(neverRunCase, 'approved');
+
+    const env = await registerEnvironment();
+    const { rows: runRows } = await getPool().query<{ id: string }>(
+      `INSERT INTO run (requirement_id, environment_id, kind, state, started_at, finished_at)
+       VALUES ($1, $2, 'falsification', 'complete', now(), now())
+       RETURNING id`,
+      [requirementId, env.id],
+    );
+    await getPool().query(
+      `INSERT INTO fault_experiment
+         (run_id, criterion_id, test_case_id, set_kind, tier, spec, plausible, verdict, detail)
+       VALUES ($1, $2, $3, 'kill', 1, '{}', true, 'kill', 'ok')`,
+      [runRows[0]!.id, criterion!.id, verifiedCase.id],
+    );
+
+    const observed = await pipelineState(jira.client, ISSUE, projectId);
+    const byId = new Map(observed.testCases.map((t) => [t.id, t]));
+    assert.equal(byId.get(verifiedCase.id)!.verified, true);
+    assert.equal(byId.get(neverRunCase.id)!.verified, false);
   });
 });

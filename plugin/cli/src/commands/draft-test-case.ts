@@ -29,7 +29,7 @@ export async function runDraftTestCase(args: ParsedArgs): Promise<never> {
   const ctx = await resolveContext(http, cfg);
   if (!ctx.ok) emitApiFailure(command, ctx.failure);
 
-  const spec = readJsonFile(command, jsonFile);
+  const spec = await readJsonFile(command, jsonFile);
   if (typeof spec !== 'object' || spec === null) {
     emitFailure(command, 'json_file_invalid', '--json-file must contain a TestCaseSpec JSON object');
   }

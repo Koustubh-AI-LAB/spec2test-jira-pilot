@@ -15,7 +15,7 @@ import { contentHash } from '../hash.ts';
  * API_VERSION doc comment) is that a cached older plugin refuses to run
  * against a newer/incompatible schema rather than guessing it's fine.
  */
-const EXPECTED_API_VERSION = 3;
+const EXPECTED_API_VERSION = 4;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..', '..', '..');
