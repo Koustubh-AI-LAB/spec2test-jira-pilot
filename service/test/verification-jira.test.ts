@@ -12,12 +12,16 @@ import assert from 'node:assert/strict';
 import { postVerification } from '../src/jira/write.ts';
 import { fakeJira } from './helpers/fake-jira.ts';
 import { useTestDatabase } from './helpers/db.ts';
+import { migrate } from '../src/db/migrate.ts';
 
 // postVerification calls audit(), which needs a real Postgres connection -
-// nothing else here touches the database. Relies on an earlier-run test file
-// (alphabetically, gates.test.ts) having already migrated spec2test_test in
-// this same `npm test` invocation.
+// nothing else here touches the database. migrate() is idempotent (CREATE
+// TABLE IF NOT EXISTS), so calling it here costs nothing when another file
+// already has - but this file must not depend on that, since running it
+// alone (or under file-sharded CI) would otherwise fail with "relation
+// audit_event does not exist".
 await useTestDatabase();
+await migrate();
 
 const ISSUE = 'VERIFY-1';
 const FIELDS = {

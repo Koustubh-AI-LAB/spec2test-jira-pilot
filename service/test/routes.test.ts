@@ -266,11 +266,18 @@ describe('GET /jobs/:id', () => {
 
 describe('GET /pipeline/:issueKey', () => {
   it('answers through the injected Jira, with no requirement yet', async () => {
-    const res = await send('GET', `/pipeline/${ISSUE}`);
+    const p = await project();
+    const res = await send('GET', `/pipeline/${ISSUE}?project_id=${p.id}`);
     assert.equal(res.status, 200);
     assert.equal(res.body.stage, 'no_requirement');
     assert.equal(res.body.requirement, null);
     assert.equal(jira.writes.length, 0);
+  });
+
+  it('requires project_id', async () => {
+    const res = await send('GET', `/pipeline/${ISSUE}`);
+    assert.equal(res.status, 400);
+    assert.equal(res.body.event, 'project_id_required');
   });
 
   it('carries what the skill needs to act: criteria with hashes, and the ticket status', async () => {
@@ -285,12 +292,32 @@ describe('GET /pipeline/:issueKey', () => {
     );
     await send('POST', `/requirements/${rows[0].id}/criteria`, { criteria: [{ body: 'rule', state_affecting: true }] });
 
-    const res = await send('GET', `/pipeline/${ISSUE}`);
+    const res = await send('GET', `/pipeline/${ISSUE}?project_id=${p.id}`);
     assert.equal(res.body.stage, 'needs_criteria_posting');
     assert.equal(res.body.criteria.length, 1);
     assert.equal(res.body.criteria[0].contentHash, contentHash('rule'));
     assert.equal(res.body.criteria[0].stateAffecting, true);
     assert.equal(res.body.jira.criteriaPosted, false);
+  });
+
+  it('scopes the resume lookup by project - two projects sharing a Jira issue key never see each other requirement', async () => {
+    const pA = await project();
+    const pB = (await send('POST', '/projects', { key: 'FAKE-PILOT-B', jira_project_key: 'FAKE' })).body;
+
+    const hash = contentHash('t\n\nb');
+    await getPool().query(
+      `INSERT INTO requirement
+         (project_id, jira_issue_key, title, body, source_text_hash, state,
+          drafted_by_model, prompt_version, grounding_hash)
+       VALUES ($1,$2,'t','b',$3,'awaiting_requirement_approval','m','v','g')`,
+      [pA.id, ISSUE, hash],
+    );
+
+    const resA = await send('GET', `/pipeline/${ISSUE}?project_id=${pA.id}`);
+    assert.notEqual(resA.body.requirement, null, 'project A drafted this requirement and must see it');
+
+    const resB = await send('GET', `/pipeline/${ISSUE}?project_id=${pB.id}`);
+    assert.equal(resB.body.requirement, null, 'project B must not resume project A\'s requirement for the same issue key');
   });
 });
 
@@ -339,5 +366,27 @@ describe('dry_run through the routes', () => {
     assert.equal(preview.body.jira.dryRun, true);
     assert.ok(preview.body.jira.preview.comment);
     assert.equal(jira.writes.length, writesBefore, 'the dry run wrote to Jira');
+  });
+
+  it('POST /jira/:key/verification still persists requirement.state to Postgres even under dry_run - the "write" it skips is Jira only', async () => {
+    // Pins the documented contract (server.ts's own comment on this route):
+    // computeVerification is a deterministic recompute of what the rows
+    // already say, not a decision, and every other state-changing step does
+    // the same - dry_run only ever meant "don't write to Jira" here. Proven
+    // by corrupting the stored state by hand, then confirming a dry_run call
+    // alone corrects it back in Postgres, with no confirm step at all.
+    const requirementId = await seedCriteria();
+    await send('POST', `/jira/${ISSUE}/criteria`, { requirement_id: requirementId });
+    jira.setVerificationStatus('Criteria Approved', '2026-09-11T11:00:00.000+0530');
+    await reconcile(jira.client, ISSUE);
+
+    await getAdminPool().query(`UPDATE requirement SET state = 'contract_verified' WHERE id = $1`, [requirementId]);
+    const before_ = (await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId])).rows[0].state;
+    assert.equal(before_, 'contract_verified', 'premise: the stored state is deliberately wrong');
+
+    await send('POST', `/jira/${ISSUE}/verification`, { requirement_id: requirementId, dry_run: true });
+
+    const after_ = (await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId])).rows[0].state;
+    assert.equal(after_, 'awaiting_test_approval', 'dry_run must still persist the recomputed requirement.state to Postgres');
   });
 });

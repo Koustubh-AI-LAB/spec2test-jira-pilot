@@ -9,9 +9,9 @@ export async function runPostCriteria(args: ParsedArgs): Promise<never> {
   const command = 'post-criteria';
   const issue = args.flags.issue;
   const requirementId = args.flags['requirement-id'];
-  const preview = Boolean(args.flags.preview);
-  const confirm = Boolean(args.flags.confirm);
-  const force = Boolean(args.flags.force);
+  const preview = args.flags.preview === true;
+  const confirm = args.flags.confirm === true;
+  const force = args.flags.force === true;
   if (typeof issue !== 'string' || typeof requirementId !== 'string') {
     usageError(command, 'usage: s2t post-criteria --issue <KEY> --requirement-id <id> --preview|--confirm [--force]');
   }

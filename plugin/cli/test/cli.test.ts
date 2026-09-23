@@ -61,6 +61,7 @@ describe('s2t status', () => {
       reconcile: { action: 'up_to_date', detail: 'd' },
       jira: { verificationStatus: 'Criteria Approved', criteriaPosted: true, summary: 's', requirementText: 'r' },
     };
+    stub.respond('GET', '/projects/S2T-PILOT', { status: 200, body: PROJECT });
     stub.respond('GET', '/pipeline/S2T-1', { status: 200, body: pipeline });
 
     const before_ = stub.requests.length;
@@ -71,7 +72,8 @@ describe('s2t status', () => {
     assert.equal(body.stage, 'awaiting_test_approval');
     assert.equal(body.pendingTestCases.length, 1, 'the proposed test case should be pending');
     assert.equal(body.uncoveredCriteria.length, 0);
-    assert.equal(since(before_)[0]?.path, '/pipeline/S2T-1');
+    const pipelineReq = since(before_).find((r) => r.path === '/pipeline/S2T-1');
+    assert.equal(pipelineReq?.query.get('project_id'), PROJECT.id);
   });
 
   it('requires --issue', async () => {
@@ -92,6 +94,45 @@ describe('s2t reconcile', () => {
     n = stub.requests.length;
     await runCli(['reconcile', '--issue', 'S2T-1', '--confirm'], env());
     assert.equal((since(n)[0]?.body as { dry_run: boolean }).dry_run, false);
+  });
+
+  it('--confirm false is a usage error, not a silent no-op write (Boolean("false") === true)', async () => {
+    const n = stub.requests.length;
+    const res = await runCli(['reconcile', '--issue', 'S2T-1', '--confirm', 'false'], env());
+    assert.equal(res.status, 1);
+    assert.equal((res.stderr as { event: string }).event, 'usage_error');
+    assert.equal(since(n).length, 0, '--confirm false must never reach the service as a real write');
+  });
+});
+
+describe('parseArgs edge cases', () => {
+  it('a string flag with nothing after it before the next flag is a usage error', async () => {
+    const res = await runCli(['approve-test-case', '--test-case-id', 'tc1', '--seen-hash', '--reject'], env());
+    assert.equal(res.status, 1);
+    assert.equal((res.stderr as { event: string }).event, 'usage_error');
+  });
+
+  it('a string flag with nothing after it at end-of-args is a usage error', async () => {
+    const res = await runCli(['approve-test-case', '--test-case-id', 'tc1', '--seen-hash'], env());
+    assert.equal(res.status, 1);
+    assert.equal((res.stderr as { event: string }).event, 'usage_error');
+  });
+
+  it('--flag=value is the escape hatch for a value that itself starts with "--"', async () => {
+    stub.respond('POST', '/gate2/decisions', { status: 200, body: { recorded: true, state: 'rejected', sameActorBothGates: false } });
+    const n = stub.requests.length;
+    await runCli(
+      ['approve-test-case', '--test-case-id', 'tc1', '--seen-hash', 'h1', '--reject', '--reason=--looks-like-a-flag'],
+      env(),
+    );
+    const sent = since(n)[0]!.body as { reason: string };
+    assert.equal(sent.reason, '--looks-like-a-flag');
+  });
+
+  it('"=" on a switch flag is a usage error, since switches take no value', async () => {
+    const res = await runCli(['grounding', '--full=true'], env());
+    assert.equal(res.status, 1);
+    assert.equal((res.stderr as { event: string }).event, 'usage_error');
   });
 });
 
@@ -199,13 +240,29 @@ describe('s2t draft-criteria', () => {
     assert.equal(sent.criteria.length, 1);
     assert.equal(sent.drafted_by_model, undefined, 'criterion has no provenance columns - nothing should be sent');
   });
+
+  it('--json-file - fails loud with stdin_timeout instead of hanging when nothing is piped', async () => {
+    stub.respond('GET', '/requirements/req-1', {
+      status: 200,
+      body: { requirement: { id: 'req-1', jira_issue_key: 'S2T-1', body: 't\n\nfull text', state: 'awaiting_requirement_approval' } },
+    });
+
+    const res = await runCli(
+      ['draft-criteria', '--requirement-id', 'req-1', '--model', 'claude-opus-5', '--json-file', '-'],
+      env({ S2T_STDIN_TIMEOUT_MS: '200' }),
+      { keepStdinOpen: true },
+    );
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    assert.equal((res.stdout as { ok: boolean }).ok, false);
+    assert.equal((res.stdout as { event: string }).event, 'stdin_timeout');
+  });
 });
 
 describe('s2t redraft', () => {
   it('looks up the ticket via the requirement own jira_issue_key, no --issue flag needed', async () => {
     stub.respond('GET', '/requirements/req-1', {
       status: 200,
-      body: { requirement: { id: 'req-1', jira_issue_key: 'S2T-1', body: 'old', state: 'stale' } },
+      body: { requirement: { id: 'req-1', project_id: 'proj-1', jira_issue_key: 'S2T-1', body: 'old', state: 'stale' } },
     });
     stub.respond('GET', '/pipeline/S2T-1', {
       status: 200,
@@ -237,6 +294,9 @@ describe('s2t redraft', () => {
     const sent = posted!.body as { body: string; reason: string };
     assert.equal(sent.body, 't2\n\nnew text', 'redraft must adopt the CURRENT ticket text, not the stale one');
     assert.equal(sent.reason, 'drifted');
+
+    const pipelineReq = since(n).find((r) => r.path === '/pipeline/S2T-1');
+    assert.equal(pipelineReq?.query.get('project_id'), 'proj-1', 'must scope the pipeline lookup by the requirement own project');
   });
 });
 
@@ -447,6 +507,16 @@ describe('s2t sync', () => {
     const res = await runCli(['sync', '--issue', 'S2T-1', '--requirement-id', 'req-1', '--confirm'], env());
     assert.equal(res.status, 0, JSON.stringify(res.stdout));
     assert.equal((since(n)[0]!.body as { dry_run: boolean }).dry_run, false);
+  });
+
+  it('--preview still reports postgresWritten: true - the service persists requirement.state regardless of dry_run', async () => {
+    stub.respond('POST', '/jira/S2T-1/verification', {
+      status: 200,
+      body: { verification: { state: 'weak', criteria: [] }, jira: { dryRun: true, reason: 'preview', fingerprint: 'fp' } },
+    });
+    const res = await runCli(['sync', '--issue', 'S2T-1', '--requirement-id', 'req-1', '--preview'], env());
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    assert.equal((res.stdout as { postgresWritten: boolean }).postgresWritten, true);
   });
 });
 

@@ -14,7 +14,7 @@ export async function runApproveTestCase(args: ParsedArgs): Promise<never> {
   const command = 'approve-test-case';
   const testCaseId = args.flags['test-case-id'];
   const seenHash = args.flags['seen-hash'];
-  const reject = Boolean(args.flags.reject);
+  const reject = args.flags.reject === true;
   const reason = args.flags.reason;
   if (typeof testCaseId !== 'string' || typeof seenHash !== 'string') {
     usageError(

@@ -25,7 +25,20 @@ export interface CliResult {
   stderr: unknown;
 }
 
-export function runCli(args: string[], env: Record<string, string>, input?: string): Promise<CliResult> {
+export interface RunCliOptions {
+  input?: string;
+  /** Leave stdin open instead of ending it - for proving `--json-file -`
+   *  fails loud on a timeout rather than hanging when nothing is piped. */
+  keepStdinOpen?: boolean;
+}
+
+export function runCli(
+  args: string[],
+  env: Record<string, string>,
+  inputOrOptions?: string | RunCliOptions,
+): Promise<CliResult> {
+  const { input, keepStdinOpen } =
+    typeof inputOrOptions === 'string' ? { input: inputOrOptions, keepStdinOpen: false } : (inputOrOptions ?? {});
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--experimental-strip-types', CLI, ...args], {
       env: { ...process.env, ...env },
@@ -55,6 +68,8 @@ export function runCli(args: string[], env: Record<string, string>, input?: stri
     if (input !== undefined) {
       child.stdin.write(input);
     }
-    child.stdin.end();
+    if (!keepStdinOpen) {
+      child.stdin.end();
+    }
   });
 }

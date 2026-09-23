@@ -9,7 +9,7 @@ export async function runReconcile(args: ParsedArgs): Promise<never> {
   const command = 'reconcile';
   const issue = args.flags.issue;
   if (typeof issue !== 'string') usageError(command, 'usage: s2t reconcile --issue <KEY> [--confirm]');
-  const confirm = Boolean(args.flags.confirm);
+  const confirm = args.flags.confirm === true;
 
   const cfg = await requireConfig(command);
   const http = createHttpClient(cfg.serviceUrl);

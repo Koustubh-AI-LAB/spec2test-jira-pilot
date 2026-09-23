@@ -55,7 +55,7 @@ const ENVIRONMENT = {
 };
 
 function programHappyPath(): void {
-  stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 3 } });
+  stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 4 } });
   stub.respond('GET', '/jira/preflight', {
     status: 200,
     body: { ok: true, accountId: 'a', displayName: 'd', base: 'https://x', fields: {} },
@@ -98,7 +98,7 @@ describe('s2t preflight', () => {
   });
 
   it('propagates a Jira preflight failure', async () => {
-    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 3 } });
+    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 4 } });
     stub.respond('GET', '/jira/preflight', {
       status: 400,
       body: { event: 'jira_field_not_found', message: 'customfield_10107 does not exist' },
@@ -109,7 +109,7 @@ describe('s2t preflight', () => {
   });
 
   it('fails loud when the target base URL is not in the environment allowlist', async () => {
-    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 3 } });
+    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 4 } });
     stub.respond('GET', '/jira/preflight', {
       status: 200,
       body: { ok: true, accountId: 'a', displayName: 'd', base: 'https://x', fields: {} },

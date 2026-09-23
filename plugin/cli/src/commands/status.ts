@@ -2,6 +2,7 @@ import type { ParsedArgs } from '../cli.ts';
 import { emit, usageError, emitApiFailure } from '../output.ts';
 import { requireConfig } from '../context.ts';
 import { createHttpClient } from '../http.ts';
+import { resolveProject } from '../resolve.ts';
 import type { PipelineState } from '../types.ts';
 import { deriveLists } from '../types.ts';
 
@@ -16,7 +17,10 @@ export async function runStatus(args: ParsedArgs): Promise<never> {
   const cfg = await requireConfig(command);
   const http = createHttpClient(cfg.serviceUrl);
 
-  const res = await http.get<PipelineState>(`/pipeline/${encodeURIComponent(issue)}`);
+  const project = await resolveProject(http, cfg);
+  if (!project.ok) emitApiFailure(command, project);
+
+  const res = await http.get<PipelineState>(`/pipeline/${encodeURIComponent(issue)}`, { project_id: project.body.id });
   if (!res.ok) emitApiFailure(command, res);
 
   emit({ ok: true, command, ...res.body, ...deriveLists(res.body) });

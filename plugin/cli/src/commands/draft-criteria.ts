@@ -34,7 +34,7 @@ export async function runDraftCriteria(args: ParsedArgs): Promise<never> {
 
   requireProvenance(command, { model, promptFile: 'criteria.v1.md', groundingText: reqRes.body.requirement.body });
 
-  const criteria = readJsonFile(command, jsonFile);
+  const criteria = await readJsonFile(command, jsonFile);
   if (!Array.isArray(criteria)) {
     emitFailure(command, 'json_file_invalid', '--json-file must contain a JSON array of {body, state_affecting?}');
   }

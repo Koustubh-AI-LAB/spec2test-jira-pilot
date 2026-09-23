@@ -60,6 +60,7 @@ export interface WriteOutcome {
 
 export interface RequirementRow {
   id: string;
+  project_id: string;
   jira_issue_key: string;
   title: string;
   body: string;

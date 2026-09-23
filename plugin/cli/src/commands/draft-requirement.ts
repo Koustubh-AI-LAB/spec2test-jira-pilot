@@ -31,7 +31,9 @@ export async function runDraftRequirement(args: ParsedArgs): Promise<never> {
   const project = await resolveProject(http, cfg);
   if (!project.ok) emitApiFailure(command, project);
 
-  const pipeline = await http.get<PipelineState>(`/pipeline/${encodeURIComponent(issue)}`);
+  const pipeline = await http.get<PipelineState>(`/pipeline/${encodeURIComponent(issue)}`, {
+    project_id: project.body.id,
+  });
   if (!pipeline.ok) emitApiFailure(command, pipeline);
 
   const body: Record<string, unknown> = {

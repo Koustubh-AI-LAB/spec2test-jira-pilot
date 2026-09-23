@@ -3,6 +3,7 @@ import { reconcile } from './jira/reconcile.ts';
 import type { ReconcileAction } from './jira/reconcile.ts';
 import type { JiraClient } from './jira/client.ts';
 import type { PipelineProperty } from './jira/read.ts';
+import { verifiedTestCaseIds } from './verification.ts';
 
 /**
  * Where a ticket is in the pipeline, computed once, here, by the service.
@@ -218,8 +219,13 @@ export interface PipelineState {
 /**
  * Gathers the inputs and computes the stage. Touches neither Jira nor Postgres
  * for writing: the reconcile runs as a dry run.
+ *
+ * Scoped by `projectId`, same as `POST /requirements`'s own resume-vs-draft
+ * check (`server.ts`) - a bare `jira_issue_key` lookup would let this
+ * command's resume decision disagree with what the server would actually do
+ * if the same Jira key were ever registered under two different projects.
  */
-export async function pipelineState(client: JiraClient, issueKey: string): Promise<PipelineState> {
+export async function pipelineState(client: JiraClient, issueKey: string, projectId: string): Promise<PipelineState> {
   const pool = getPool();
   const result = await reconcile(client, issueKey, { dryRun: true });
 
@@ -230,8 +236,8 @@ export async function pipelineState(client: JiraClient, issueKey: string): Promi
     source_text_hash: string;
   }>(
     `SELECT id, state, title, source_text_hash FROM requirement
-      WHERE jira_issue_key = $1 AND state <> 'closed' LIMIT 1`,
-    [issueKey],
+      WHERE project_id = $1 AND jira_issue_key = $2 AND state <> 'closed' LIMIT 1`,
+    [projectId, issueKey],
   );
   const requirement = reqRows[0] ?? null;
 
@@ -278,21 +284,10 @@ export async function pipelineState(client: JiraClient, issueKey: string): Promi
       ).rows.length > 0
     : false;
 
-  // Same join verification.ts's computeVerification uses per test case
-  // (run -> fault_experiment), batched once per requirement rather than once
-  // per test case. See the `verified` field's doc comment on PipelineState.
-  const verifiedIds = requirement
-    ? new Set(
-        (
-          await pool.query<{ test_case_id: string }>(
-            `SELECT DISTINCT fe.test_case_id
-               FROM run r JOIN fault_experiment fe ON fe.run_id = r.id
-              WHERE r.requirement_id = $1 AND r.kind = 'falsification'`,
-            [requirement.id],
-          )
-        ).rows.map((r) => r.test_case_id),
-      )
-    : new Set<string>();
+  // Shared with verification.ts, which owns this query - see
+  // verifiedTestCaseIds's own doc comment and the `verified` field's doc
+  // comment on PipelineState below.
+  const verifiedIds = requirement ? await verifiedTestCaseIds(requirement.id) : new Set<string>();
 
   const criteriaPosted = requirement
     ? criteriaArePosted(result.ticket?.property, requirement, criteria)

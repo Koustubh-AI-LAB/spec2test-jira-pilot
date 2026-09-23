@@ -20,29 +20,49 @@ import { runVerify } from './commands/verify.ts';
 import { runSync } from './commands/sync.ts';
 
 export interface ParsedArgs {
-  positionals: string[];
   flags: Record<string, string | boolean>;
 }
 
-function parseArgs(args: string[]): ParsedArgs {
-  const positionals: string[] = [];
+/**
+ * `switches` names this command's boolean flags: presence alone sets them
+ * `true`, absence leaves them `false`/unset - they never consume a value
+ * token. This is what stops `--confirm false`/`--reject false`/`--full
+ * false` from being silently read as `Boolean("false") === true` (every
+ * caller here used to cast a flag's raw value with `Boolean(...)`, which
+ * cannot tell "the string false" from "present"). Every other `--key`
+ * requires an explicit value: a missing one, or one that itself starts with
+ * `--`, is a usage error rather than a silently-wrong `true` - use
+ * `--key=value` for a value that legitimately starts with `--`.
+ */
+function parseArgs(command: string, args: string[], switches: ReadonlySet<string>): ParsedArgs {
   const flags: Record<string, string | boolean> = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positionals.push(arg);
+    if (!arg.startsWith('--')) {
+      usageError(command, `unexpected argument "${arg}" - every argument must be a --flag`);
     }
+    const key = arg.slice(2);
+    const eq = key.indexOf('=');
+    if (eq !== -1) {
+      const name = key.slice(0, eq);
+      if (switches.has(name)) {
+        usageError(command, `--${name} is a switch and takes no value; pass it bare, without "="`);
+      }
+      flags[name] = key.slice(eq + 1);
+      continue;
+    }
+    if (switches.has(key)) {
+      flags[key] = true;
+      continue;
+    }
+    const next = args[i + 1];
+    if (next === undefined || next.startsWith('--')) {
+      usageError(command, `--${key} requires a value`);
+    }
+    flags[key] = next;
+    i++;
   }
-  return { positionals, flags };
+  return { flags };
 }
 
 const COMMANDS: Record<string, (args: ParsedArgs) => Promise<never>> = {
@@ -60,6 +80,15 @@ const COMMANDS: Record<string, (args: ParsedArgs) => Promise<never>> = {
   sync: runSync,
 };
 
+/** Which of each command's flags are switches (Findings 1/6). */
+const BOOLEAN_FLAGS: Record<string, ReadonlySet<string>> = {
+  reconcile: new Set(['confirm']),
+  'post-criteria': new Set(['preview', 'confirm', 'force']),
+  sync: new Set(['preview', 'confirm']),
+  grounding: new Set(['full']),
+  'approve-test-case': new Set(['reject']),
+};
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   if (!command) {
@@ -71,7 +100,7 @@ async function main(): Promise<void> {
     usageError(command, `unknown command "${command}" - usage: s2t <${Object.keys(COMMANDS).join('|')}> ...`);
   }
 
-  await handler(parseArgs(rest));
+  await handler(parseArgs(command, rest, BOOLEAN_FLAGS[command] ?? new Set()));
 }
 
 try {

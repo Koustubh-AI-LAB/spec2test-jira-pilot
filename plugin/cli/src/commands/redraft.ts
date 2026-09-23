@@ -34,6 +34,7 @@ export async function runRedraft(args: ParsedArgs): Promise<never> {
 
   const pipeline = await http.get<PipelineState>(
     `/pipeline/${encodeURIComponent(reqRes.body.requirement.jira_issue_key)}`,
+    { project_id: reqRes.body.requirement.project_id },
   );
   if (!pipeline.ok) emitApiFailure(command, pipeline);
 
@@ -43,7 +44,7 @@ export async function runRedraft(args: ParsedArgs): Promise<never> {
     groundingText: pipeline.body.jira.requirementText,
   });
 
-  const criteria = readJsonFile(command, jsonFile);
+  const criteria = await readJsonFile(command, jsonFile);
   if (!Array.isArray(criteria)) {
     emitFailure(command, 'json_file_invalid', '--json-file must contain a JSON array of {body, state_affecting?}');
   }

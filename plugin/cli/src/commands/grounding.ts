@@ -11,7 +11,7 @@ import type { GroundingResult } from '../types.ts';
  *  prompt mostly just needs to know what routes exist. */
 export async function runGrounding(args: ParsedArgs): Promise<never> {
   const command = 'grounding';
-  const full = Boolean(args.flags.full);
+  const full = args.flags.full === true;
 
   const cfg = await requireConfig(command);
   const http = createHttpClient(cfg.serviceUrl);

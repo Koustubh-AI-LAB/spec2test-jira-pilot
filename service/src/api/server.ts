@@ -47,8 +47,12 @@ function isUuid(value: string): boolean {
  *    text to POST /requirements verbatim, never paraphrased) and
  *    testCases[].verified (not derivable from testCases[].state - see
  *    PipelineState's doc comment in pipeline.ts).
+ * 4: GET /pipeline/:issueKey now requires a `project_id` query param -
+ *    the resume-lookup it does was unscoped by project (unlike
+ *    POST /requirements's own resume check), so two projects sharing a Jira
+ *    issue key could have disagreed on whose requirement to resume.
  */
-export const API_VERSION = 3;
+export const API_VERSION = 4;
 
 interface Provenance {
   drafted_by_model: string;
@@ -619,7 +623,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
    */
   app.get('/pipeline/:issueKey', async (req) => {
     const { issueKey } = req.params as { issueKey: string };
-    return pipelineState(getJira(), issueKey);
+    const { project_id } = req.query as { project_id?: string };
+    if (!project_id) throw new ServiceError('project_id_required', 'project_id is a required query param');
+    return pipelineState(getJira(), issueKey, project_id);
   });
 
   app.get('/jira/preflight', async () => {
