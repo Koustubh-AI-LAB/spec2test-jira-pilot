@@ -1,0 +1,16 @@
+node_modules/
+dist/
+package-lock.json
+
+# Hash-locked or recorded content - reformatting would change what is hashed
+# or replayed.
+plugin/prompts/
+runner/fixtures/
+
+# Prose is formatted by hand.
+*.md
+
+# Scratch output.
+runner/.tmp-test/
+plugin/.scratch/
+artifacts/

@@ -11,7 +11,7 @@ export interface Provenance {
 /** Self-reported: the skill passes its own model id via --model, and the CLI
  *  can only check the shape, not verify it independently. Recorded as such,
  *  not presented as verified. */
-const MODEL_ID_RE = /^claude-[a-z0-9.\-]+$/;
+const MODEL_ID_RE = /^claude-[a-z0-9.-]+$/;
 
 export class ModelIdInvalidError extends Error {
   readonly event: string;

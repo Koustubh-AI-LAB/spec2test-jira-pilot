@@ -2,13 +2,15 @@
   "name": "@spec2test/service",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/api/server.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node --experimental-strip-types src/api/server.ts",
     "migrate": "node --experimental-strip-types src/db/migrate.ts",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "fastify": "^5.2.1",

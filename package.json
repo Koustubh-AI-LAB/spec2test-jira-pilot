@@ -3,6 +3,25 @@
   "private": true,
   "version": "0.1.0",
   "description": "Jira to Claude Code QA pipeline: requirement in, proven test out, status back on the ticket.",
+  "keywords": [
+    "jira",
+    "claude-code",
+    "test-generation",
+    "mutation-testing",
+    "playwright",
+    "qa-automation",
+    "openapi"
+  ],
+  "homepage": "https://github.com/Koustubh-AI-LAB/spec2test-jira-pilot#readme",
+  "bugs": {
+    "url": "https://github.com/Koustubh-AI-LAB/spec2test-jira-pilot/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Koustubh-AI-LAB/spec2test-jira-pilot.git"
+  },
+  "license": "Apache-2.0",
+  "author": "Koustubh Arole <arolekoustubh4@gmail.com>",
   "workspaces": [
     "service",
     "runner",
@@ -11,11 +30,21 @@
   "scripts": {
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.9"
   },
-  "license": "Apache-2.0"
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "typescript-eslint": "^8.71.1"
+  }
 }

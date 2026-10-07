@@ -2,11 +2,13 @@
   "name": "@spec2test/runner",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
-    "init": "node --experimental-strip-types src/cli.ts init"
+    "init": "node --experimental-strip-types src/cli.ts init",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "typescript": "^5.7.3",

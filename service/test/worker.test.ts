@@ -39,10 +39,6 @@ async function post(url: string, payload: unknown) {
   const res = await app.inject({ method: 'POST', url, payload: payload as object });
   return { status: res.statusCode, body: res.json() };
 }
-async function get(url: string) {
-  const res = await app.inject({ method: 'GET', url });
-  return { status: res.statusCode, body: res.json() };
-}
 
 const PROVENANCE = {
   drafted_by_model: 'claude-opus-5',
@@ -67,6 +63,7 @@ async function assertPostgresReachable(): Promise<void> {
   } catch (err) {
     throw new Error(
       `Postgres unreachable at ${TEST_DATABASE_URL} - run "docker compose up -d postgres" first: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   } finally {
     await client.end().catch(() => {});

@@ -148,6 +148,8 @@ function extractSteps(stdout: string): PlaywrightStepResult[] {
   const suites = (report as { suites?: unknown[] }).suites ?? [];
   const steps: PlaywrightStepResult[] = [];
 
+  // Playwright's JSON report is untyped input; walked defensively below.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const walkSuite = (suite: any): void => {
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
