@@ -4,6 +4,7 @@ import type { ReconcileAction } from './jira/reconcile.ts';
 import type { JiraClient } from './jira/client.ts';
 import type { PipelineProperty } from './jira/read.ts';
 import { verifiedTestCaseIds } from './verification.ts';
+import { reopenGate2IfArtifactDrifted } from './gates/gates.ts';
 
 /**
  * Where a ticket is in the pipeline, computed once, here, by the service.
@@ -275,6 +276,32 @@ export async function pipelineState(client: JiraClient, issueKey: string, projec
       ).rows
     : [];
 
+  // A hand-edited generated file must never be silently trusted as still
+  // being what Gate 2 approved - reopen Gate 2 (flip back to 'proposed')
+  // before this row feeds `computeStage`/the response below, so the skill
+  // sees `awaiting_test_approval` again without needing to run `verify`
+  // first to discover it. See gates.ts::reopenGate2IfArtifactDrifted's own
+  // doc comment for why this isn't `approvalIsCurrent()`.
+  for (const tc of testCases) {
+    if (tc.state === 'approved') {
+      const { reopened } = await reopenGate2IfArtifactDrifted(tc.id);
+      if (reopened) tc.state = 'proposed';
+    }
+  }
+
+  const experimentCounts = requirement
+    ? (
+        await pool.query<{ criterion_id: string; n: number }>(
+          `SELECT fe.criterion_id, COUNT(*)::int AS n
+             FROM fault_experiment fe JOIN criterion c ON c.id = fe.criterion_id
+            WHERE c.requirement_id = $1
+            GROUP BY fe.criterion_id`,
+          [requirement.id],
+        )
+      ).rows
+    : [];
+  const experimentCountByCriterion = new Map(experimentCounts.map((r) => [r.criterion_id, r.n]));
+
   const jobActive = requirement
     ? (
         await pool.query(
@@ -331,6 +358,10 @@ export async function pipelineState(client: JiraClient, issueKey: string, projec
       state: c.state,
       stateAffecting: c.state_affecting,
       contentHash: c.content_hash,
+      // Raw fault_experiment row count for this criterion - "measure, don't
+      // cap". Pure
+      // visibility, nothing gates on it.
+      experimentCount: experimentCountByCriterion.get(c.id) ?? 0,
     })),
     testCases: testCases.map((t) => ({
       id: t.id,

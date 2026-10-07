@@ -269,4 +269,33 @@ describe('pull reconcile', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
       });
     }
   });
+
+  // Step 6 ("close the Stale split between reconcile.ts and verification.ts"):
+  // continues directly from the drift test above,
+  // whose `finally` reverted the ticket's summary back to what
+  // requirement.source_text_hash already records - no redraft, so this is
+  // exactly the "drift reverted without a redraft" path the fix targets.
+  // Verification Status on the ticket is still "Criteria Approved" from
+  // earlier in this suite; reconcile() re-applies that same decision now
+  // that the text matches again.
+  it('clears a stale requirement.state once drift reverts and gate 1 re-closes, with no redraft', async () => {
+    const before = await getPool().query<{ state: string }>('SELECT state FROM requirement WHERE id = $1', [
+      requirementId,
+    ]);
+    assert.equal(before.rows[0]!.state, 'stale', 'premise: the previous test left the requirement stale');
+
+    const result = await reconcile(client, ISSUE);
+    assert.equal(result.action, 'gate1_closed', result.detail);
+
+    const { rows: criteria } = await getPool().query<{ state: string }>(
+      'SELECT state FROM criterion WHERE requirement_id = $1',
+      [requirementId],
+    );
+    assert.ok(criteria.every((c) => c.state === 'approved'), 'not every criterion returned to approved');
+
+    const after = await getPool().query<{ state: string }>('SELECT state FROM requirement WHERE id = $1', [
+      requirementId,
+    ]);
+    assert.notEqual(after.rows[0]!.state, 'stale', 'requirement.state never cleared off stale on the approval path');
+  });
 });

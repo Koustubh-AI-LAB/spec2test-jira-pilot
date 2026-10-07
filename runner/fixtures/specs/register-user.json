@@ -2,7 +2,7 @@
   "criterionId": "C-REGISTER-USER",
   "name": "register a new user",
   "method": "POST",
-  "path": "/api/users",
+  "path": "/users",
   "auth": "none",
   "body": {
     "user": {

@@ -81,7 +81,7 @@ describe('certifyTestCase', () => {
     // unparseable by deriveKillFaults, so the report carries only immunity
     // verdicts. Without an explicit rule this falls through to the default
     // `certified` case at the bottom of certifyTestCase - exactly the gap
-    // the master plan's own named weak-test check exists to catch.
+    // the named weak-test check exists to catch.
     const result = certifyTestCase(report([immunity('SURVIVE')]));
     assert.equal(result.verdict, 'rejected');
     assert.match(result.reason, /no kill faults/);

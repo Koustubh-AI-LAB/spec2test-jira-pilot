@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import type { JiraClient } from './client.ts';
 import { fetchTicket, loadFieldMap, VERIFICATION_STATUS } from './read.ts';
 import { isServiceComment } from './write.ts';
@@ -5,6 +6,7 @@ import type { FieldMap, TicketSnapshot, ChangelogEntry } from './read.ts';
 import { decide } from '../gates/gates.ts';
 import type { Decision } from '../gates/gates.ts';
 import { getPool } from '../db/pool.ts';
+import { withRequirementLock } from '../db/lock.ts';
 import { audit } from '../audit.ts';
 import { NotFoundError } from '../errors.ts';
 import { byInstant, isBetween, instant } from './time.ts';
@@ -118,6 +120,9 @@ export async function reconcile(
     ticket,
   };
 
+  // Unlocked - just checks whether there's anything to protect. No writer
+  // anywhere creates a requirement row inside a locked section, so there is
+  // nothing this specific read can race against.
   const { rows } = await pool.query<LocalRequirement>(
     `SELECT id, state, source_text_hash, jira_issue_key
        FROM requirement
@@ -139,79 +144,101 @@ export async function reconcile(
     };
   }
 
-  const { rows: criteria } = await pool.query<LocalCriterion>(
-    `SELECT id, ordinal, content_hash, state
-       FROM criterion WHERE requirement_id = $1 ORDER BY ordinal`,
-    [local.id],
-  );
+  // Everything from here on reads a snapshot and then writes based on it -
+  // exactly the read-then-blind-write pattern that races a concurrent
+  // gate2/decisions rejection or another reconcile() call for the same
+  // requirement (see db/lock.ts's doc comment). One advisory lock, one
+  // transaction, re-reading the snapshot inside it rather than trusting the
+  // pre-lock read above, which could already be stale by the time the lock
+  // is acquired.
+  return withRequirementLock(local.id, async (db) => {
+    const { rows: freshRows } = await db.query<LocalRequirement>(
+      `SELECT id, state, source_text_hash, jira_issue_key FROM requirement WHERE id = $1`,
+      [local.id],
+    );
+    const freshLocal = freshRows[0];
+    if (!freshLocal) {
+      return {
+        ...base,
+        action: 'no_local_instance',
+        detail: `requirement ${local.id} was removed between the lookup and reconcile taking the lock.`,
+      };
+    }
 
-  // Drift is checked BEFORE either decision, and that order is the whole
-  // point: if the requirement moved, a decision sitting on the ticket refers
-  // to text that no longer exists and must not be honoured just because it
-  // arrived first.
-  if (local.source_text_hash !== ticket.requirementHash) {
-    const drift = { approvedHash: local.source_text_hash, currentHash: ticket.requirementHash };
-    if (!dryRun) await markStale(local.id, issueKey, drift);
+    const { rows: criteria } = await db.query<LocalCriterion>(
+      `SELECT id, ordinal, content_hash, state
+         FROM criterion WHERE requirement_id = $1 ORDER BY ordinal`,
+      [freshLocal.id],
+    );
+
+    // Drift is checked BEFORE either decision, and that order is the whole
+    // point: if the requirement moved, a decision sitting on the ticket refers
+    // to text that no longer exists and must not be honoured just because it
+    // arrived first.
+    if (freshLocal.source_text_hash !== ticket.requirementHash) {
+      const drift = { approvedHash: freshLocal.source_text_hash, currentHash: ticket.requirementHash };
+      if (!dryRun) await markStale(db, freshLocal.id, issueKey, drift);
+      return {
+        ...base,
+        action: 'drift_detected',
+        detail:
+          'requirement text changed since it was drafted from ' +
+          `(${freshLocal.source_text_hash.slice(0, 12)} -> ${ticket.requirementHash.slice(0, 12)}). ` +
+          'criteria marked stale and gate 1 reopened; existing tests keep running but stop ' +
+          'counting as certified until re-approved.',
+        localHash: freshLocal.source_text_hash,
+        drift,
+      };
+    }
+
+    if (ticket.verificationStatus === VERIFICATION_STATUS.criteriaApproved) {
+      const change = findStatusChange(
+        ticket.changelog,
+        fields.verificationStatus,
+        VERIFICATION_STATUS.criteriaApproved,
+      );
+      if (!change) {
+        return {
+          ...base,
+          action: 'gate1_pending',
+          detail:
+            'Verification Status reads "Criteria Approved" but no changelog entry explains ' +
+            'when - refusing to guess who approved this or when.',
+          localHash: freshLocal.source_text_hash,
+        };
+      }
+      return applyGate1Decision(db, freshLocal, criteria, ticket, change, 'approved', issueKey, dryRun, base);
+    }
+
+    if (ticket.verificationStatus === VERIFICATION_STATUS.criteriaRejected) {
+      const change = findStatusChange(
+        ticket.changelog,
+        fields.verificationStatus,
+        VERIFICATION_STATUS.criteriaRejected,
+      );
+      if (!change) {
+        return {
+          ...base,
+          action: 'gate1_pending',
+          detail:
+            'Verification Status reads "Criteria Rejected" but no changelog entry explains ' +
+            'when - refusing to guess who rejected this or when.',
+          localHash: freshLocal.source_text_hash,
+        };
+      }
+      return applyGate1Decision(db, freshLocal, criteria, ticket, change, 'rejected', issueKey, dryRun, base);
+    }
+
     return {
       ...base,
-      action: 'drift_detected',
+      action: 'gate1_pending',
       detail:
-        'requirement text changed since it was drafted from ' +
-        `(${local.source_text_hash.slice(0, 12)} -> ${ticket.requirementHash.slice(0, 12)}). ` +
-        'criteria marked stale and gate 1 reopened; existing tests keep running but stop ' +
-        'counting as certified until re-approved.',
-      localHash: local.source_text_hash,
-      drift,
+        'waiting on the PO: Verification Status is ' +
+        `${ticket.verificationStatus ?? '(unset)'}, gate 1 closes on ` +
+        `"${VERIFICATION_STATUS.criteriaApproved}" or "${VERIFICATION_STATUS.criteriaRejected}".`,
+      localHash: freshLocal.source_text_hash,
     };
-  }
-
-  if (ticket.verificationStatus === VERIFICATION_STATUS.criteriaApproved) {
-    const change = findStatusChange(
-      ticket.changelog,
-      fields.verificationStatus,
-      VERIFICATION_STATUS.criteriaApproved,
-    );
-    if (!change) {
-      return {
-        ...base,
-        action: 'gate1_pending',
-        detail:
-          'Verification Status reads "Criteria Approved" but no changelog entry explains ' +
-          'when - refusing to guess who approved this or when.',
-        localHash: local.source_text_hash,
-      };
-    }
-    return applyGate1Decision(local, criteria, ticket, change, 'approved', issueKey, dryRun, base);
-  }
-
-  if (ticket.verificationStatus === VERIFICATION_STATUS.criteriaRejected) {
-    const change = findStatusChange(
-      ticket.changelog,
-      fields.verificationStatus,
-      VERIFICATION_STATUS.criteriaRejected,
-    );
-    if (!change) {
-      return {
-        ...base,
-        action: 'gate1_pending',
-        detail:
-          'Verification Status reads "Criteria Rejected" but no changelog entry explains ' +
-          'when - refusing to guess who rejected this or when.',
-        localHash: local.source_text_hash,
-      };
-    }
-    return applyGate1Decision(local, criteria, ticket, change, 'rejected', issueKey, dryRun, base);
-  }
-
-  return {
-    ...base,
-    action: 'gate1_pending',
-    detail:
-      'waiting on the PO: Verification Status is ' +
-      `${ticket.verificationStatus ?? '(unset)'}, gate 1 closes on ` +
-      `"${VERIFICATION_STATUS.criteriaApproved}" or "${VERIFICATION_STATUS.criteriaRejected}".`,
-    localHash: local.source_text_hash,
-  };
+  });
 }
 
 /**
@@ -224,6 +251,7 @@ export async function reconcile(
  * with it as context."
  */
 async function applyGate1Decision(
+  db: PoolClient,
   local: LocalRequirement,
   criteria: LocalCriterion[],
   ticket: TicketSnapshot,
@@ -233,7 +261,6 @@ async function applyGate1Decision(
   dryRun: boolean,
   base: Base,
 ): Promise<ReconcileResult> {
-  const pool = getPool();
   const alreadyDone = decision === 'approved' ? 'approved' : 'rejected';
 
   // What the PO saw is the criteria comment we posted, so this binds to the
@@ -244,7 +271,7 @@ async function applyGate1Decision(
   const edits = textEdits(ticket.changelog).filter((e) => isBetween(e.at, postedAt, change.at));
   if (edits.length > 0) {
     if (!dryRun) {
-      await markStale(local.id, issueKey, {
+      await markStale(db, local.id, issueKey, {
         approvedHash: local.source_text_hash,
         currentHash: ticket.requirementHash,
       });
@@ -343,10 +370,25 @@ async function applyGate1Decision(
 
   // A rejection sends the requirement back to the developer, not forward -
   // "Draft" in the plan's own language - because nothing here can redraft on
-  // its own; there is no LLM call in this service. An approval never touches
-  // requirement.state here: it only ever moves forward via the criteria.
+  // its own; there is no LLM call in this service. An approval normally never
+  // touches requirement.state here: it only ever moves forward via the
+  // criteria, and computeVerification (verification.ts) picks up from there.
+  //
+  // The one exception is clearing a stale requirement.state left over from an
+  // earlier markStale() call whose drift has since reverted without a
+  // redraft (see Step 6's "close the Stale split" fix): the criteria above
+  // just returned to 'approved' via decide(), proving Gate 1 is genuinely
+  // closed again, but nothing else clears the requirement-level flag - this
+  // branch used to be the rejection-only mirror of that write and left the
+  // approval path with no equivalent, so a reverted-drift requirement stayed
+  // stuck reporting stage 'stale' forever even though every criterion read
+  // 'approved'.
   if (decision === 'rejected' && done > 0) {
-    await pool.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [
+    await db.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [
+      local.id,
+    ]);
+  } else if (decision === 'approved' && done > 0 && local.state === 'stale') {
+    await db.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [
       local.id,
     ]);
   }
@@ -371,7 +413,7 @@ async function applyGate1Decision(
   // has to reflect what actually happened, not what was attempted - this is
   // what previously let a reconcile claim "gate1_closed" while every
   // criterion sat untouched. Re-read rather than trust the loop's own count.
-  const { rows: finalStates } = await pool.query<{ state: string }>(
+  const { rows: finalStates } = await db.query<{ state: string }>(
     'SELECT state FROM criterion WHERE requirement_id = $1',
     [local.id],
   );
@@ -450,42 +492,38 @@ function changeActor(entry: ChangelogEntry): string {
   return entry.authorAccountId ? `jira:${entry.authorAccountId}` : `jira:${entry.authorName}`;
 }
 
+/**
+ * Runs on the caller's already-locked connection (see `reconcile()`'s
+ * `withRequirementLock` wrapper) rather than opening its own - it used to
+ * open a separate connection/transaction here, which meant the advisory lock
+ * held on a different connection gave this write no real protection at all.
+ */
 async function markStale(
+  db: PoolClient,
   requirementId: string,
   issueKey: string,
   drift: { approvedHash: string; currentHash: string },
 ): Promise<void> {
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    // Only proposed/approved criteria go stale. A rejected one stays rejected:
-    // drift is not a reason to forget that someone turned it down.
-    await client.query(
-      `UPDATE criterion SET state = 'stale', updated_at = now()
-        WHERE requirement_id = $1 AND state IN ('proposed', 'approved')`,
-      [requirementId],
-    );
-    await client.query(
-      `UPDATE requirement SET state = 'stale', updated_at = now() WHERE id = $1`,
-      [requirementId],
-    );
-    await audit(
-      {
-        event: 'requirement_drift_detected',
-        subject: `requirement:${requirementId}`,
-        actor: 'system',
-        detail: { issue_key: issueKey, ...drift, source: 'pull_reconcile' },
-      },
-      client,
-    );
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  // Only proposed/approved criteria go stale. A rejected one stays rejected:
+  // drift is not a reason to forget that someone turned it down.
+  await db.query(
+    `UPDATE criterion SET state = 'stale', updated_at = now()
+      WHERE requirement_id = $1 AND state IN ('proposed', 'approved')`,
+    [requirementId],
+  );
+  await db.query(
+    `UPDATE requirement SET state = 'stale', updated_at = now() WHERE id = $1`,
+    [requirementId],
+  );
+  await audit(
+    {
+      event: 'requirement_drift_detected',
+      subject: `requirement:${requirementId}`,
+      actor: 'system',
+      detail: { issue_key: issueKey, ...drift, source: 'pull_reconcile' },
+    },
+    db,
+  );
 }
 
 export async function requireOpenRequirement(issueKey: string): Promise<LocalRequirement> {

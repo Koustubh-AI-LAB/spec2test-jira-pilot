@@ -6,8 +6,7 @@ const CAPTURE_REF = /\{\{capture\.([A-Za-z0-9_]+)\}\}/g;
 
 /**
  * Grounding check, before a single line of code is generated: a test cannot
- * be drafted for an endpoint the schema doesn't document. Same principle as
- * TestForge's validate_actions_against_catalog, ported as an idea, not code.
+ * be drafted for an endpoint the schema doesn't document.
  *
  * Grounding has two parts, not one: the route has to exist (isGrounded), and
  * the spec's body has to actually carry what that route's schema requires
@@ -28,6 +27,22 @@ export function validateSpec(spec: TestCaseSpec, schema: OpenApiDoc): void {
   }
   if (spec.assertions.length === 0) {
     throw new RunnerError('spec_missing_assertions', `${spec.name}: a test case must declare at least one assertion`);
+  }
+
+  // Templating is applied to path/authToken/body only. A `{{...}}` inside an
+  // assertion `check` is compared as a literal string at run time - found the
+  // hard way when a drafted `body.article.slug === '{{capture.slug}}'` failed
+  // its own smoke run against a perfectly correct response.
+  for (const assertion of spec.assertions) {
+    if (assertion.check.includes('{{')) {
+      throw new RunnerError(
+        'spec_template_in_check',
+        `${spec.name}: assertion "${assertion.name}" uses a {{...}} placeholder inside its check - ` +
+          `placeholders are only substituted in path, authToken and body, never in a check, so it ` +
+          `would be compared as the literal text. Assert on a value that does not depend on a ` +
+          `placeholder (e.g. \`body.article.slug\` bare-truthy, or a fixed literal).`,
+      );
+    }
   }
 
   // Walked in order so a capture must be declared by an EARLIER step than the
@@ -64,6 +79,20 @@ function checkRequest(
       `${label}: authToken is set but auth is "${request.auth}" - apiClient only sends an ` +
         `Authorization header when auth is "user", so the token would be silently ignored and ` +
         `the request would run unauthenticated`,
+    );
+  }
+
+  // The replay stage matches recorded responses by method+path. `{{unique}}`
+  // is fresh on every run, so a path containing it can never match the
+  // transcript the capture run recorded - the test then fails at replay for a
+  // reason that has nothing to do with the target. (`{{capture.x}}` is fine:
+  // replay serves the recorded response, so the captured value is stable.)
+  if (request.path.includes('{{unique}}')) {
+    throw new RunnerError(
+      'spec_unique_in_path',
+      `${label}: path contains {{unique}}, which changes every run and can never match the ` +
+        `recorded replay transcript. Use {{unique}} only in body/authToken; for a "does not exist" ` +
+        `path use a fixed literal that cannot exist (e.g. /articles/no-such-article-slug).`,
     );
   }
 

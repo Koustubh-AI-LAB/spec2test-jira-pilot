@@ -9,7 +9,7 @@ import type { FalsificationReport } from './runner/types.ts';
  * calls, per test case, to derive that rollup; nothing here writes to the
  * database itself.
  *
- * Rules, straight from the master plan's item 9 and its failure-mode table:
+ * Rules, straight from the design's failure-mode table:
  * a kill fault that survived means the test didn't catch the bug it claims
  * to; an immunity fault that got killed means the test is brittle (fails on
  * an unrelated change); either rejects certification, never both silently
@@ -18,7 +18,7 @@ import type { FalsificationReport } from './runner/types.ts';
  * noise, so it holds instead.
  *
  * Provisional, same as the design doc treats Assertion Sensitivity: this is
- * the simplest rule that satisfies the master plan's stated cases (a
+ * the simplest rule that satisfies the design's stated cases (a
  * deliberately weak test rejected, a deliberately brittle test caught by
  * Immunity), not a fully general policy. Expect it to move once real
  * tickets produce reports these rules don't cleanly cover.
@@ -45,8 +45,8 @@ export function certifyTestCase(report: FalsificationReport): CertifyResult {
   }
 
   // A test whose assertions derive zero kill faults at all (e.g. "asserts
-  // only that the response is non-empty", the master plan's own named
-  // example of a deliberately weak test) has nothing proving it catches any
+  // only that the response is non-empty", the canonical example of a
+  // deliberately weak test) has nothing proving it catches any
   // bug - it can sail through with every immunity fault surviving and no
   // kill fault to fail, which would otherwise fall through to `certified`
   // by default further down. Caught here explicitly, before that default is

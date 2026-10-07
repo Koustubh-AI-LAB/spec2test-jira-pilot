@@ -196,7 +196,7 @@ describe('aggregate (verdict logic)', () => {
     assert.equal(aggregate(killFault, attempts).verdict, 'SURVIVE');
   });
 
-  it('kill: no failure anywhere, but the mutation never applied -> INCONCLUSIVE, never SURVIVE (the TestForge lesson)', () => {
+  it('kill: no failure anywhere, but the mutation never applied -> INCONCLUSIVE, never SURVIVE', () => {
     const attempts: FaultAttempt[] = [
       { testPassed: true, failedStep: undefined, applied: false },
       { testPassed: true, failedStep: undefined, applied: false },

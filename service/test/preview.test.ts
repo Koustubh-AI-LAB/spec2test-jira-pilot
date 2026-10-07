@@ -107,6 +107,28 @@ describe('postCriteria dry run', () => {
     assert.match(preview.reason, /already on the ticket/);
   });
 
+  // Step 6 (failure-mode table, "partial Jira sync recorded
+  // incomplete"): the dry-run test above only proves the preview
+  // *recognizes* the crash window; this proves a real (confirmed) retry
+  // actually recovers through it - findPostedComment finds the comment
+  // already on the ticket and completes the property write, rather than
+  // posting a second, duplicate comment.
+  it('a confirmed retry after the same crash recovers via findPostedComment, without a duplicate comment', async () => {
+    const jira = ticket();
+    await postCriteria(jira.client, criteriaInput);
+    assert.equal(jira.state.comments?.length, 1, 'premise: exactly one comment exists');
+    jira.state.property = undefined; // the crash window: comment exists, bookkeeping does not
+
+    const recovered = await postCriteria(jira.client, criteriaInput);
+    assert.equal(recovered.wrote, true);
+    assert.match(recovered.reason, /recovered from an incomplete previous write/);
+    assert.equal(jira.state.comments?.length, 1, 'a second, duplicate comment was posted');
+    assert.ok(jira.state.property, 'the property write was never completed on retry');
+
+    const commentPosts = jira.writes.filter((w) => w.method === 'POST' && w.path.endsWith('/comment'));
+    assert.equal(commentPosts.length, 1, 'only the original write should have POSTed a comment');
+  });
+
   it('a changed criterion produces a different fingerprint and a fresh preview', async () => {
     const jira = ticket();
     await postCriteria(jira.client, criteriaInput);

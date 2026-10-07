@@ -15,20 +15,24 @@ import { contentHash } from '../hash.ts';
  * API_VERSION doc comment) is that a cached older plugin refuses to run
  * against a newer/incompatible schema rather than guessing it's fine.
  */
-const EXPECTED_API_VERSION = 4;
+const EXPECTED_API_VERSION = 7;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..', '..', '..');
 const CANONICAL_CLIENT = join(REPO_ROOT, 'runner', 'src', 'client', 'apiClient.ts');
 
 /**
- * Ten checks, in order, stopping at the first failure. Fails loud - never
- * warns. See PLAN-5.3-5.7-WALKING-SKELETON.md 5.6 for why each one is here;
- * check 10 (vendored client freshness) is the one not in the master plan's
- * own list and the most valuable: a stale vendored client silently ignores
- * `subject: true`, so every fault stops firing and every kill fault scores
- * INCONCLUSIVE while the suite stays green - a silent-green failure of
- * exactly the kind this project exists to catch.
+ * Eleven checks, in order, stopping at the first failure. Fails loud - never
+ * warns. Two checks deserve a note: check 4 (Postgres reachability) and
+ * check 11 (vendored client freshness). Check 11 is the more valuable: a
+ * stale vendored client silently ignores `subject: true`, so every fault stops firing and every kill fault
+ * scores INCONCLUSIVE while the suite stays green - a silent-green failure
+ * of exactly the kind this project exists to catch. Check 4 exists because
+ * `GET /version` (check 2) is a static object that never touches Postgres -
+ * only `GET /health` does - so without this check the service could report
+ * itself reachable while Postgres was down, and preflight would only fail
+ * later, confusingly, at whichever check first happened to touch the
+ * database (originally check 5, `GET /projects/:key`).
  */
 export async function runPreflight(_args: ParsedArgs): Promise<never> {
   const command = 'preflight';
@@ -67,13 +71,25 @@ export async function runPreflight(_args: ParsedArgs): Promise<never> {
     );
   }
 
-  // 4. Jira field-map validation
+  // 4. Postgres reachable - GET /version alone doesn't prove this; see this
+  // function's own doc comment.
+  const health = await http.get<{ status: string }>('/health');
+  if (!health.ok) {
+    emitFailure(
+      command,
+      'postgres_unreachable',
+      `the service is up but its Postgres connection is not: ${health.event}: ${health.message}`,
+      'docker compose --profile postgres up -d postgres',
+    );
+  }
+
+  // 5. Jira field-map validation
   const jiraPreflight = await http.get<{ ok: true; accountId: string; base: string }>('/jira/preflight');
   if (!jiraPreflight.ok) {
     emitApiFailure(command, jiraPreflight);
   }
 
-  // 5. project registered
+  // 6. project registered
   const project = await resolveProject(http, cfg);
   if (!project.ok) {
     emitFailure(
@@ -84,13 +100,13 @@ export async function runPreflight(_args: ParsedArgs): Promise<never> {
     );
   }
 
-  // 6. target base URL in the environment allowlist
+  // 7. target base URL in the environment allowlist
   const environment = await resolveEnvironment(http, project.body.id, cfg.conduitBaseUrl);
   if (!environment.ok) {
     emitApiFailure(command, environment);
   }
 
-  // 7. grounding readable
+  // 8. grounding readable
   const grounding = await http.get<{ contentHash: string; source: string }>(
     `/environments/${environment.body.id}/grounding`,
   );
@@ -98,7 +114,7 @@ export async function runPreflight(_args: ParsedArgs): Promise<never> {
     emitApiFailure(command, grounding);
   }
 
-  // 8. every prompt's hash matches the lock
+  // 9. every prompt's hash matches the lock
   try {
     loadPrompt('criteria.v1.md');
     loadPrompt('testcase.v1.md');
@@ -109,7 +125,7 @@ export async function runPreflight(_args: ParsedArgs): Promise<never> {
     throw err;
   }
 
-  // 9. target repo checked out and scaffolded
+  // 10. target repo checked out and scaffolded
   const spec2testDir = join(cfg.conduitRepoPath, 'spec2test');
   if (!existsSync(cfg.conduitRepoPath)) {
     emitFailure(
@@ -128,8 +144,8 @@ export async function runPreflight(_args: ParsedArgs): Promise<never> {
     );
   }
 
-  // 10. vendored client freshness - the check not in the master plan's own
-  // list; see this file's doc comment for why it matters.
+  // 11. vendored client freshness - see this file's doc comment for why it
+  // matters.
   const vendoredClientPath = join(spec2testDir, 'client', 'apiClient.ts');
   if (!existsSync(vendoredClientPath)) {
     emitFailure(

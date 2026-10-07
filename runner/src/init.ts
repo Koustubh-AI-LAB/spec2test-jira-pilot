@@ -47,7 +47,7 @@ const TSCONFIG = `{
 
 /**
  * Scaffolds/refreshes spec2test/ in the target app's own repo - the actual
- * artifact home per the master plan. Re-run when the client wrapper changes,
+ * artifact home. Re-run when the client wrapper changes,
  * not on every generate.
  */
 export function initTargetRepo(targetRepoRoot: string): void {

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { decideVerificationState } from '../src/verification.ts';
 import type { CriterionCoverage } from '../src/verification.ts';
 
-const covered = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: true });
-const uncovered = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: false });
+const covered = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: true, quarantinedOnly: false });
+const uncovered = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: false, quarantinedOnly: false });
+const quarantined = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: false, quarantinedOnly: true });
 
 const base = {
   nonRejectedCriteriaCount: 1,
@@ -55,5 +56,41 @@ describe('decideVerificationState', () => {
     // set by computeVerification, but the pure function itself should still
     // resolve unambiguously if ever called with both true.
     assert.equal(decideVerificationState({ ...base, gate1Closed: true, hasRunningJob: true }), 'verifying');
+  });
+
+  // Step 6 (failure-mode table): a target outage
+  // during `verify` quarantines every fault tried - it must never read as a
+  // regression. See verification.ts's coverageForCriterion.
+  it('preserves contract_verified (unchanged) when the only shortfall is a quarantined run - a target outage proves nothing', () => {
+    assert.equal(
+      decideVerificationState({
+        ...base,
+        coverage: [covered('c1'), quarantined('c2')],
+        wasEverCertified: true,
+      }),
+      'unchanged',
+    );
+  });
+
+  it('still reports failing when a genuine rejected verdict sits alongside a quarantined one - quarantine never masks a real regression', () => {
+    assert.equal(
+      decideVerificationState({
+        ...base,
+        coverage: [covered('c1'), quarantined('c2'), uncovered('c3')],
+        wasEverCertified: true,
+      }),
+      'failing',
+    );
+  });
+
+  it('quarantine-only never invents contract_verified/weak for a requirement that was never certified either - stays unchanged', () => {
+    assert.equal(
+      decideVerificationState({
+        ...base,
+        coverage: [quarantined('c1')],
+        wasEverCertified: false,
+      }),
+      'unchanged',
+    );
   });
 });

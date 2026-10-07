@@ -68,8 +68,8 @@ function readStdin(command: string): Promise<string> {
   });
 }
 
-/** `--json-file <path>` - see PLAN-5.3-5.7-WALKING-SKELETON.md 5.3 for why
- *  this replaced a stdin heredoc or an inline --json blob. `-` reads stdin,
+/** `--json-file <path>` - replaces a stdin heredoc or an inline --json
+ *  blob. `-` reads stdin,
  *  so this CLI's own tests need no temp files. */
 export async function readJsonFile(command: string, path: string): Promise<unknown> {
   let raw: string;

@@ -11,8 +11,7 @@ import type { PipelineState } from '../types.ts';
  * If this command let Claude paraphrase the ticket into the requirement
  * body, `contentHash(ticket.requirementText)` would stop matching
  * `requirement.source_text_hash` on the very next reconcile - drift, from a
- * bug that would look like a Jira sync problem rather than what it is. See
- * PLAN-5.3-5.7-WALKING-SKELETON.md's Context section.
+ * bug that would look like a Jira sync problem rather than what it is.
  */
 export async function runDraftRequirement(args: ParsedArgs): Promise<never> {
   const command = 'draft-requirement';

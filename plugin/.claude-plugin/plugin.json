@@ -3,6 +3,10 @@
   "name": "spec2test",
   "version": "0.1.0",
   "description": "Jira to Claude Code QA pipeline: requirement in, proven test out, status back on the ticket.",
+  "author": {
+    "name": "koustubh",
+    "email": "arolekoustubh4@gmail.com"
+  },
   "skills": [
     "./skills/pipeline"
   ]

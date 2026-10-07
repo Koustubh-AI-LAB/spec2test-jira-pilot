@@ -1,7 +1,7 @@
 /**
  * Gate tests run against a REAL Postgres, not a mock.
  *
- * Deliberate, and the same call TestForge made: the things most worth proving
+ * Deliberate: the things most worth proving
  * here are SQL-level - a partial unique index, a REVOKE, an ON CONFLICT, a
  * transaction boundary. A mocked client cannot prove any of them, and a green
  * suite that proved none of them would be worse than no suite.
@@ -10,6 +10,9 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { buildServer } from '../src/api/server.ts';
@@ -532,5 +535,250 @@ describe('redraft', () => {
     });
     assert.equal(res.status, 400);
     assert.equal(res.body.event, 'provenance_required');
+  });
+});
+
+describe('generated-file hash drift reopens gate 2 (Step 6)', () => {
+  async function seedApprovedTestCase(issueKey: string) {
+    const { requirement } = await seedRequirement(issueKey);
+    const criterion = (
+      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
+    ).body.criteria[0];
+    await post('/gate1/decisions', {
+      subject_id: criterion.id,
+      decision: 'approved',
+      actor: 'po@example.com',
+      channel: 'jira',
+      seen_hash: criterion.content_hash,
+    });
+    const testCase = (
+      await post('/test-cases', {
+        criterion_id: criterion.id,
+        name: 'n',
+        kind: 'api',
+        spec: { method: 'GET', path: '/x' },
+        ...PROVENANCE,
+      })
+    ).body;
+    await post('/gate2/decisions', {
+      subject_id: testCase.id,
+      decision: 'approved',
+      actor: 'dev@example.com',
+      channel: 'claude-code',
+      seen_hash: testCase.content_hash,
+    });
+    return { requirement, criterion, testCase };
+  }
+
+  /** What worker/index.ts's persistComplete writes after a real `verify` -
+   *  simulated directly here so this test needs no live target/runner CLI. */
+  async function simulateVerifiedArtifact(testCaseId: string, filePath: string, fileContent: string) {
+    await getPool().query(`UPDATE test_case SET artifact_path = $1, artifact_hash = $2 WHERE id = $3`, [
+      filePath,
+      contentHash(fileContent),
+      testCaseId,
+    ]);
+  }
+
+  async function testCaseState(id: string): Promise<string> {
+    const { rows } = await getPool().query<{ state: string }>('SELECT state FROM test_case WHERE id = $1', [id]);
+    return rows[0]!.state;
+  }
+
+  it('reopens gate 2 (flips approved back to proposed) when the on-disk generated file no longer matches artifact_hash', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'spec2test-gates-drift-'));
+    const filePath = join(scratch, 'generated.spec.ts');
+    const original = "test('x', async () => {});\n";
+    writeFileSync(filePath, original, 'utf8');
+
+    const { testCase } = await seedApprovedTestCase('DRIFT-1');
+    await simulateVerifiedArtifact(testCase.id, filePath, original);
+    assert.equal(await testCaseState(testCase.id), 'approved', 'premise: gate 2 is closed before the hand-edit');
+
+    // The hand-edit: someone changed the generated file after it was verified.
+    writeFileSync(filePath, "test('x', async () => { /* edited by hand */ });\n", 'utf8');
+
+    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: '00000000-0000-4000-8000-000000000000' });
+    assert.equal(res.status, 400, JSON.stringify(res.body));
+    assert.equal(res.body.event, 'test_case_not_approved');
+    assert.equal(await testCaseState(testCase.id), 'proposed', 'gate 2 was not reopened');
+
+    const audit = await getPool().query(
+      `SELECT event FROM audit_event WHERE subject = $1 ORDER BY created_at DESC LIMIT 1`,
+      [`test_case:${testCase.id}`],
+    );
+    assert.equal(audit.rows[0]?.event, 'test_case_artifact_drift_reopened_gate2');
+  });
+
+  it('does not reopen gate 2 when the on-disk file is untouched - a matching hash is not drift', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'spec2test-gates-nodrift-'));
+    const filePath = join(scratch, 'generated.spec.ts');
+    const content = "test('x', async () => {});\n";
+    writeFileSync(filePath, content, 'utf8');
+
+    const { testCase } = await seedApprovedTestCase('DRIFT-2');
+    await simulateVerifiedArtifact(testCase.id, filePath, content);
+
+    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: '00000000-0000-4000-8000-000000000000' });
+    // Reaches the real enqueue path now (state is still 'approved') - status
+    // 200/queued, not the 400 the drift case produces.
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.status, 'queued');
+    assert.equal(await testCaseState(testCase.id), 'approved');
+  });
+
+  it('a test case that has never been verified (no artifact_path yet) is left alone', async () => {
+    const { testCase } = await seedApprovedTestCase('DRIFT-3');
+    assert.equal(await testCaseState(testCase.id), 'approved');
+
+    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: '00000000-0000-4000-8000-000000000000' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.status, 'queued');
+  });
+});
+
+describe('GET /test-cases/:id/verify-result (Step 6 gap fix: verify no longer returns this inline)', () => {
+  async function seedApprovedTestCase(issueKey: string) {
+    const { requirement } = await seedRequirement(issueKey);
+    const criterion = (
+      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
+    ).body.criteria[0];
+    await post('/gate1/decisions', {
+      subject_id: criterion.id,
+      decision: 'approved',
+      actor: 'po@example.com',
+      channel: 'jira',
+      seen_hash: criterion.content_hash,
+    });
+    const testCase = (
+      await post('/test-cases', {
+        criterion_id: criterion.id,
+        name: 'n',
+        kind: 'api',
+        spec: { method: 'GET', path: '/x' },
+        ...PROVENANCE,
+      })
+    ).body;
+    return { requirement, criterion, testCase };
+  }
+
+  async function seedEnvironment(projectId: string) {
+    return (
+      await post('/environments', { project_id: projectId, base_url: 'http://localhost:5000', class: 'ephemeral' })
+    ).body as { id: string };
+  }
+
+  /** What worker/index.ts's persistComplete writes into run/fault_experiment
+   *  after a real `verify` - seeded directly so this needs no live target. */
+  async function seedFalsificationRun(
+    requirementId: string,
+    environmentId: string,
+    criterionId: string,
+    testCaseId: string,
+    faults: { kind: 'kill' | 'immunity'; verdict: 'kill' | 'survive' | 'inconclusive' | 'quarantined'; detail: string }[],
+  ) {
+    const { rows } = await getPool().query<{ id: string }>(
+      `INSERT INTO run (requirement_id, environment_id, kind, state) VALUES ($1,$2,'falsification','complete') RETURNING id`,
+      [requirementId, environmentId],
+    );
+    for (const [i, f] of faults.entries()) {
+      await getPool().query(
+        `INSERT INTO fault_experiment (run_id, criterion_id, test_case_id, set_kind, spec, verdict, detail)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          rows[0]!.id,
+          criterionId,
+          testCaseId,
+          f.kind,
+          JSON.stringify({ id: `f${i}`, kind: f.kind, description: `fault ${i}`, targetAssertion: 'status_check' }),
+          f.verdict,
+          f.detail,
+        ],
+      );
+    }
+  }
+
+  it('reports hasRun: false, certify: null for a test case that has never been verified', async () => {
+    const { testCase } = await seedApprovedTestCase('VR-1');
+    const res = await get(`/test-cases/${testCase.id}/verify-result`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.hasRun, false);
+    assert.equal(res.body.certify, null);
+  });
+
+  it('reports the certify verdict and a reason mentioning the surviving fault, for a rejected kill fault', async () => {
+    const { requirement, criterion, testCase } = await seedApprovedTestCase('VR-2');
+    const env = await seedEnvironment(requirement.project_id);
+    await seedFalsificationRun(requirement.id, env.id, criterion.id, testCase.id, [
+      { kind: 'kill', verdict: 'survive', detail: 'the mutated response still passed the assertion' },
+    ]);
+
+    const res = await get(`/test-cases/${testCase.id}/verify-result`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.hasRun, true);
+    assert.equal(res.body.certify.verdict, 'rejected');
+    assert.match(res.body.certify.reason, /survived/);
+    assert.match(res.body.certify.reason, /mutated response still passed/);
+  });
+
+  it('reports certified for a test case whose faults all came back as expected', async () => {
+    const { requirement, criterion, testCase } = await seedApprovedTestCase('VR-3');
+    const env = await seedEnvironment(requirement.project_id);
+    await seedFalsificationRun(requirement.id, env.id, criterion.id, testCase.id, [
+      { kind: 'kill', verdict: 'kill', detail: 'the assertion correctly caught the mutation' },
+    ]);
+
+    const res = await get(`/test-cases/${testCase.id}/verify-result`);
+    assert.equal(res.body.certify.verdict, 'certified');
+  });
+
+  it('reports quarantined, not rejected, when the environment was unstable', async () => {
+    const { requirement, criterion, testCase } = await seedApprovedTestCase('VR-4');
+    const env = await seedEnvironment(requirement.project_id);
+    await seedFalsificationRun(requirement.id, env.id, criterion.id, testCase.id, [
+      { kind: 'kill', verdict: 'quarantined', detail: 'the initial healthy control failed - environment unstable' },
+    ]);
+
+    const res = await get(`/test-cases/${testCase.id}/verify-result`);
+    assert.equal(res.body.certify.verdict, 'quarantined');
+    assert.match(res.body.certify.reason, /environment unstable/);
+  });
+
+  it('404s an unknown test case and a malformed id', async () => {
+    assert.equal((await get('/test-cases/00000000-0000-4000-8000-000000000000/verify-result')).status, 404);
+    assert.equal((await get('/test-cases/nope/verify-result')).status, 404);
+  });
+});
+
+describe('GET /test-cases/:id (Step 6 gap fix: status.testCases[] never carries spec)', () => {
+  it('returns the full row, spec included, for a drafted test case', async () => {
+    const { requirement } = await seedRequirement('GTC-1');
+    const criterion = (
+      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
+    ).body.criteria[0];
+    await post('/gate1/decisions', {
+      subject_id: criterion.id,
+      decision: 'approved',
+      actor: 'po@example.com',
+      channel: 'jira',
+      seen_hash: criterion.content_hash,
+    });
+    const spec = { method: 'GET', path: '/api/loans', assertions: [{ name: 'a', check: 'status === 200' }] };
+    const testCase = (
+      await post('/test-cases', { criterion_id: criterion.id, name: 'n', kind: 'api', spec, ...PROVENANCE })
+    ).body;
+
+    const res = await get(`/test-cases/${testCase.id}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.id, testCase.id);
+    assert.equal(res.body.name, 'n');
+    assert.equal(res.body.state, 'proposed');
+    assert.deepEqual(res.body.spec, spec);
+    assert.equal(res.body.content_hash, testCase.content_hash);
+  });
+
+  it('404s an unknown test case and a malformed id', async () => {
+    assert.equal((await get('/test-cases/00000000-0000-4000-8000-000000000000')).status, 404);
+    assert.equal((await get('/test-cases/nope')).status, 404);
   });
 });

@@ -423,6 +423,40 @@ describe('s2t draft-test-case', () => {
   });
 });
 
+describe('s2t get-test-case', () => {
+  it('fetches the full row, spec included, by id', async () => {
+    stub.respond('GET', '/test-cases/tc1', {
+      status: 200,
+      body: { id: 'tc1', criterion_id: 'c1', name: 'n', kind: 'api', spec: { method: 'GET', path: '/x' }, content_hash: 'h1', state: 'proposed' },
+    });
+
+    const res = await runCli(['get-test-case', '--test-case-id', 'tc1'], env());
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    const body = res.stdout as { id: string; spec: unknown; content_hash: string };
+    assert.equal(body.id, 'tc1');
+    assert.deepEqual(body.spec, { method: 'GET', path: '/x' });
+    assert.equal(body.content_hash, 'h1');
+  });
+
+  it('requires --test-case-id', async () => {
+    const res = await runCli(['get-test-case'], env());
+    assert.equal(res.status, 1);
+    assert.equal((res.stderr as { event: string }).event, 'usage_error');
+  });
+
+  it('propagates a 404 from the service', async () => {
+    stub.respond('GET', '/test-cases/nope', {
+      status: 404,
+      body: { event: 'not_found', message: 'test case nope not found' },
+    });
+    const res = await runCli(['get-test-case', '--test-case-id', 'nope'], env());
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    const body = res.stdout as { ok: boolean; event: string };
+    assert.equal(body.ok, false);
+    assert.equal(body.event, 'not_found');
+  });
+});
+
 describe('s2t approve-test-case', () => {
   it('approves with exactly one id and the seen hash', async () => {
     stub.respond('POST', '/gate2/decisions', { status: 200, body: { recorded: true, state: 'approved', sameActorBothGates: false } });
@@ -479,7 +513,25 @@ describe('s2t approve-test-case', () => {
 });
 
 describe('s2t verify', () => {
-  it('resolves the environment, posts to /test-cases/:id/verify, and distills a summary', async () => {
+  it('resolves the environment, posts to /test-cases/:id/verify, and reports the job as queued (Step 6: the route no longer blocks)', async () => {
+    stub.respond('GET', '/projects/S2T-PILOT', { status: 200, body: PROJECT });
+    stub.respond('GET', '/environments/resolve', { status: 200, body: ENVIRONMENT });
+    stub.respond('POST', '/test-cases/tc1/verify', {
+      status: 200,
+      body: { jobId: 'job-1', status: 'queued' },
+    });
+
+    const n = stub.requests.length;
+    const res = await runCli(['verify', '--test-case-id', 'tc1'], env());
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    const body = res.stdout as { summary: string; jobId: string };
+    assert.match(body.summary, /queued: job job-1/);
+    assert.equal(body.jobId, 'job-1');
+    const sent = since(n).find((r) => r.path === '/test-cases/tc1/verify');
+    assert.equal((sent!.body as { environment_id: string }).environment_id, 'env-1');
+  });
+
+  it('still distills a "verified"/"failed" summary for a completed result (e.g. read back later via GET /jobs/:id)', async () => {
     stub.respond('GET', '/projects/S2T-PILOT', { status: 200, body: PROJECT });
     stub.respond('GET', '/environments/resolve', { status: 200, body: ENVIRONMENT });
     stub.respond('POST', '/test-cases/tc1/verify', {
@@ -487,13 +539,43 @@ describe('s2t verify', () => {
       body: { jobId: 'job-1', status: 'done', verification: { state: 'contract_verified', criteria: [] } },
     });
 
-    const n = stub.requests.length;
     const res = await runCli(['verify', '--test-case-id', 'tc1'], env());
     assert.equal(res.status, 0, JSON.stringify(res.stdout));
     const body = res.stdout as { summary: string };
     assert.equal(body.summary, 'verified: contract_verified');
-    const sent = since(n).find((r) => r.path === '/test-cases/tc1/verify');
-    assert.equal((sent!.body as { environment_id: string }).environment_id, 'env-1');
+  });
+});
+
+describe('s2t verify-result', () => {
+  it('reports the certify verdict and reason for a test case that has been verified', async () => {
+    stub.respond('GET', '/test-cases/tc1/verify-result', {
+      status: 200,
+      body: { testCaseId: 'tc1', hasRun: true, certify: { verdict: 'rejected', reason: 'kill fault "x" survived' } },
+    });
+
+    const res = await runCli(['verify-result', '--test-case-id', 'tc1'], env());
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    const body = res.stdout as { summary: string; hasRun: boolean };
+    assert.equal(body.summary, 'rejected: kill fault "x" survived');
+    assert.equal(body.hasRun, true);
+  });
+
+  it('reports "never verified yet" when the test case has no falsification run', async () => {
+    stub.respond('GET', '/test-cases/tc2/verify-result', {
+      status: 200,
+      body: { testCaseId: 'tc2', hasRun: false, certify: null },
+    });
+
+    const res = await runCli(['verify-result', '--test-case-id', 'tc2'], env());
+    assert.equal(res.status, 0, JSON.stringify(res.stdout));
+    const body = res.stdout as { summary: string };
+    assert.equal(body.summary, 'never verified yet');
+  });
+
+  it('requires --test-case-id', async () => {
+    const res = await runCli(['verify-result'], env());
+    assert.equal(res.status, 1);
+    assert.equal((res.stderr as { event: string }).event, 'usage_error');
   });
 });
 

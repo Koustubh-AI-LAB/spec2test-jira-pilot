@@ -2,7 +2,7 @@
   "criterionId": "C-CREATE-ARTICLE",
   "name": "create an article as an authenticated user",
   "method": "POST",
-  "path": "/api/articles",
+  "path": "/articles",
   "auth": "user",
   "body": {
     "article": {
