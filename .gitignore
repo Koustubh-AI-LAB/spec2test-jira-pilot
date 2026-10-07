@@ -7,3 +7,13 @@ dist/
 # inside runner/ on purpose, so @playwright/test resolves via its real
 # node_modules instead of a system tmpdir with none of its own.
 runner/.tmp-test/
+
+# Scratch JSON the pipeline skill writes for --json-file - inspectable after
+# a run, never committed.
+plugin/.scratch/
+
+# Run logs.
+artifacts/
+
+# Personal Claude Code settings.
+.claude/settings.local.json

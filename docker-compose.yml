@@ -1,8 +1,8 @@
 # Local Postgres for the State Service.
 #
-# Port 5435, deliberately: TestForge's compose already uses 5434, and 5433 was
-# found squatted on this machine by an unrelated container - a collision there
-# shows up as a silent connection to the wrong database, not a clear error.
+# Port 5435 rather than 5432, deliberately: a developer machine often already
+# runs another Postgres, and a port collision shows up as a silent connection
+# to the wrong database, not a clear error. The tests expect 5435.
 services:
   postgres:
     image: postgres:16
