@@ -1,17 +1,20 @@
 # spec2test-jira-pilot
 
+[![CI](https://github.com/Koustubh-AI-LAB/spec2test-jira-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Koustubh-AI-LAB/spec2test-jira-pilot/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Koustubh-AI-LAB/spec2test-jira-pilot/badge)](https://scorecard.dev/viewer/?uri=github.com/Koustubh-AI-LAB/spec2test-jira-pilot)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 A requirement leaves Jira, becomes a test that is proven to actually catch the
 bug it claims to, and the result lands back on the ticket. The developer stays
 in their IDE; the product owner stays in Jira.
 
-**Status: build steps 1-4 of 8 done, step 5 in progress.** The State Service and
-its gate logic are proven; Jira read-back and write-back are live, with the PO's
-approval or rejection in Jira closing or reopening Gate 1, no webhook, and a
-real redraft path. Codegen, a five-stage validator and tier-1 fault injection
-(Kill Set / Immunity Set) are all proven live against a self-hosted Conduit.
-There is no LLM in the loop yet and no Claude Code plugin — that is step 5, and
-the walking skeleton completes there. See `EXECUTION-PLAN.md` for the full
-record and the forward plan.
+**Status: pilot (v0.1.0).** The walking skeleton runs end to end: a Claude Code
+skill drafts acceptance criteria from a Jira ticket, the product owner approves
+them in Jira, test cases are drafted, generated as Playwright API tests,
+validated, and proven by fault injection against a self-hosted
+[Conduit](https://github.com/gothinkster/node-express-realworld-example-app)
+target, and the verdict is written back to the ticket. Expect breaking changes
+before 1.0.
 
 ## Why a service and not just a Claude Code skill
 
@@ -29,28 +32,90 @@ locally and be switched off between sessions without breaking the handoff.
 
 | Path | What it is |
 |---|---|
-| `service/` | State Service: schema, gates, audit ledger, Jira I/O, worker (step 4) |
-| `plugin/` | Claude Code plugin — the orchestrator skill (step 5) |
-| `runner/` | Codegen, validation, fault injection (steps 3-4) |
+| `service/` | State Service: schema, gates, audit ledger, Jira I/O, verification worker |
+| `runner/` | Codegen, a five-stage validator, and tier-1 fault injection (Kill Set / Immunity Set) |
+| `plugin/` | Claude Code plugin: the `/pipeline` skill, the `s2t` CLI it drives, and versioned drafting prompts |
 
-## Running it
+## Prerequisites
+
+- **Node.js 22.9 or newer** (every script relies on `--experimental-strip-types`)
+- **Docker**, for the Postgres 16 container
+- **A Jira Cloud site** with a *classic* API token (see the notes in
+  [`.env.example`](.env.example) for why a scoped token is not enough) and four
+  custom fields on the project's issues:
+
+  | Field | Type | Values |
+  |---|---|---|
+  | Verification Status | Select list | Not Started, Criteria Drafted, Criteria Approved, Criteria Rejected, Tests Drafted, Tests Approved, Contract-Verified, Weak, Failing |
+  | Criteria Certified | Number | |
+  | Criteria Total | Number | |
+  | Last Verified | Date time | |
+
+  Put each field's id (`customfield_NNNNN`) in `.env`. The service checks
+  them against the site at startup and refuses to run with a missing one.
+- **A target app.** The pilot targets a local clone of
+  [gothinkster/node-express-realworld-example-app](https://github.com/gothinkster/node-express-realworld-example-app),
+  run with that project's own instructions.
+- **[Claude Code](https://claude.com/claude-code)**, to run the pipeline skill.
+
+## Quick start
 
 ```bash
-npm install
-docker compose up -d postgres
-
-cd service
-cp ../.env.example ../.env        # then fill in as needed
-npm run migrate                   # runs as the owner role
-npm test                          # 58 tests, all passing, needs the container above
-                                  # (12 of them are live Jira tests, skipped if
-                                  #  JIRA_API_TOKEN is unset - but a token that
-                                  #  is SET and dead fails loud, it doesn't skip)
-npm start                         # http://127.0.0.1:8787
+git clone https://github.com/Koustubh-AI-LAB/spec2test-jira-pilot.git
+cd spec2test-jira-pilot
+npm ci
+cp .env.example .env          # fill in Jira, target app and CLI values
+npm run db:up                 # Postgres 16 on localhost:5435
+npm run migrate -w service    # runs as the owner role
+npm start -w service          # State Service on http://127.0.0.1:8787
 ```
 
-Postgres is on **5435** deliberately — 5434 is TestForge's and 5433 was found
-occupied on this machine.
+Both `migrate` and `start` read `.env` from the repo root.
+
+### Connect a target app
+
+```bash
+# Scaffold spec2test/ (API client wrapper, Playwright config) into the target
+npm run init -w runner -- /path/to/conduit
+
+# Register the project and the target environment with the State Service
+curl -s -X POST http://127.0.0.1:8787/projects -H 'content-type: application/json' \
+  -d '{"key":"S2T-PILOT","jira_project_key":"S2T","target_repo_path":"/path/to/conduit"}'
+curl -s -X POST http://127.0.0.1:8787/environments -H 'content-type: application/json' \
+  -d '{"project_id":"<id from the previous response>","base_url":"http://localhost:3000/api","class":"ephemeral","openapi_url":"/abs/path/to/spec2test-jira-pilot/runner/fixtures/openapi/conduit.snapshot.yml"}'
+```
+
+An unregistered base URL is refused, never warned about. The environment class
+decides what fault injection is allowed: `production` is smoke-only by
+construction.
+
+### Run the pipeline
+
+```bash
+cd plugin/cli && npm link && cd ../..   # puts `s2t` on your PATH
+s2t preflight                           # eleven checks; fails loud on the first problem
+claude --plugin-dir plugin              # then, inside Claude Code:
+#   /pipeline S2T-1
+```
+
+The skill is resumable: every invocation re-reads the ticket and the service's
+state, so you can close the session after Gate 1 and pick it up days later.
+`scripts/s2t-env.sh` (Bash) and `scripts/s2t-env.ps1` (PowerShell) set up a
+shell to call `s2t` directly without linking.
+
+## Development
+
+```bash
+npm run lint           # ESLint
+npm run format:check   # Prettier (npm run format to fix)
+npm run typecheck      # tsc --noEmit in every workspace
+npm test               # every workspace; needs the Postgres container
+```
+
+Live Jira tests are skipped when `JIRA_API_TOKEN` is unset, and live target
+tests when `CONDUIT_BASE_URL` is unset. A token that is *set* but dead fails
+loud rather than skipping. Tests use a dedicated `spec2test_test` database, so
+they never touch the data of a running session.
 
 ## Jira: pull, never push
 
@@ -77,12 +142,6 @@ deleted, and the requirement returns to `draft` - nothing here redrafts on its
 own, since drafting needs an LLM this service never calls; the reason is
 there for the next session to redraft with as context.
 
-Verified live end to end against the real `S2T-1` fixture, not just the
-scripted stand-in: presented, rejected with a genuine PO comment (picked up
-correctly as the reason), requirement returned to `draft`, redrafted through
-the actual route with an added criterion, re-presented, approved - all three
-criteria closed. `Criteria Rejected` is provisioned on the live field.
-
 Two things learned the hard way, both load-bearing:
 
 - **`/rest/api/3/mypermissions` describes the user, not the token.** It reported
@@ -90,10 +149,11 @@ Two things learned the hard way, both load-bearing:
   Preflight probes a real endpoint instead.
 - **Jira timestamps carry a site offset** (`+0530`) while ours are UTC `Z`.
   Compared as strings they order wrongly, which silently broke the approval
-  window. All comparisons go through `src/jira/time.ts`; see `test/time.test.ts`.
+  window. All comparisons go through `service/src/jira/time.ts`; see
+  `service/test/time.test.ts`.
 
-`/rest/api/3/search` is retired on this site - only `/search/jql` works, and it
-rejects unbounded JQL, so reconcile queries are always project-scoped.
+`/rest/api/3/search` is retired on Jira Cloud - only `/search/jql` works, and
+it rejects unbounded JQL, so reconcile queries are always project-scoped.
 
 ## Two roles, on purpose
 
@@ -122,15 +182,16 @@ Not "the code runs" — specifically:
 - editing the requirement after approval marks the criteria stale rather than
   letting the approval stand - **and a redraft genuinely recovers from that**,
   not just once: approve, drift, redraft, re-approve ends with everything
-  actually approved, not with a reconcile that claims success while nothing
-  moved (the bug that shipped once and is now a regression test, not a memory);
+  actually approved;
 - an approval or rejection with no record of what was actually presented is
   refused outright, never guessed at from the row's current text;
 - a rejection is bound to the PO's own comment as its reason, never a comment
   from before the decision or from someone else, and sends the requirement
   back to `draft` without deleting the criteria it rejected;
 - a crash between a comment landing on the ticket and our own record of it
-  is recovered from by finding the comment again, not by posting a duplicate.
+  is recovered from by finding the comment again, not by posting a duplicate;
+- concurrent writers to the same requirement are serialized, so a reconcile
+  and a Gate 2 rejection racing each other cannot lose an update.
 
 They run against a real Postgres and, for the parts that need it, a real Jira
 site or a scripted stand-in that proves multi-step sequences fast and
@@ -139,6 +200,17 @@ tests exist separately from the one-transition-at-a-time ones: every bug found
 in the second bug-hunting pass lived in a sequence no single-transition test
 could have caught.
 
-The full plan, including the readiness gates this has to clear before it points
-at a company system, is in
-`(private design notes, not published)`.
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). This project
+follows a [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in a public issue.
+
+## License
+
+[Apache License 2.0](LICENSE). Third-party material is listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
