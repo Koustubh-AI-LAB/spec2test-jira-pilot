@@ -17,8 +17,7 @@ export interface LoadedPrompt {
 
 /**
  * Fails loud when a prompt file's hash differs from `prompts.lock.json` - an
- * edited prompt must not ship under a stale version id. See
- * PLAN-5.3-5.7-WALKING-SKELETON.md 5.4.
+ * edited prompt must not ship under a stale version id.
  */
 export class PromptHashMismatchError extends Error {
   readonly event: string;

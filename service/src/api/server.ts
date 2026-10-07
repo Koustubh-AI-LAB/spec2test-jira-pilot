@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { getPool } from '../db/pool.ts';
+import { withRequirementLock } from '../db/lock.ts';
 import { audit } from '../audit.ts';
 import { contentHash } from '../hash.ts';
-import { decide } from '../gates/gates.ts';
+import { decide, reopenGate2IfArtifactDrifted } from '../gates/gates.ts';
 import type { Channel, Decision, Gate } from '../gates/gates.ts';
 import { capabilitiesFor, isEnvironmentClass } from '../env/capabilities.ts';
 import { EnvironmentNotAllowedError, ServiceError } from '../errors.ts';
@@ -16,10 +17,11 @@ import { reconcile } from '../jira/reconcile.ts';
 import { loadFieldMap, validateFieldMap } from '../jira/read.ts';
 import { postCriteria, postDrift, postRefusal, postVerification } from '../jira/write.ts';
 import type { CriterionView } from '../jira/write.ts';
-import { runOnce } from '../worker/index.ts';
+import { startPoller } from '../worker/poller.ts';
 import { runRunnerCli } from '../worker/runnerCli.ts';
 import type { SpecValidationResult } from '../runner/types.ts';
-import { computeVerification } from '../verification.ts';
+import { computeVerification, latestFalsificationReport } from '../verification.ts';
+import { certifyTestCase } from '../certify.ts';
 import { pipelineState } from '../pipeline.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,8 +53,32 @@ function isUuid(value: string): boolean {
  *    the resume-lookup it does was unscoped by project (unlike
  *    POST /requirements's own resume check), so two projects sharing a Jira
  *    issue key could have disagreed on whose requirement to resume.
+ * 5: Step 6 hardening. POST /test-cases/:id/verify no longer blocks until
+ *    falsification finishes - it enqueues the job and returns
+ *    `{jobId, status:'queued'}` immediately; GET /jobs/:id (already
+ *    version-1) is how a caller now learns the outcome, via `s2t status`'s
+ *    `verifying` stage. POST /specs/validate refuses with
+ *    `draft_attempts_exhausted` after 2 consecutive failed attempts for the
+ *    same criterion. POST /test-cases/:id/verify also refuses with
+ *    `test_case_not_approved` if the on-disk generated file no longer
+ *    matches what Gate 2 approved (reopens Gate 2 instead of certifying
+ *    drifted code).
+ * 6: adds GET /test-cases/:id/verify-result - the certify verdict + reason
+ *    for a test case's most recent falsification run, keyed by
+ *    test_case_id rather than job_id so a fresh session can call it
+ *    straight from `s2t status`'s testCases[]. Restores the diagnostic
+ *    `verify`'s own response carried inline before version 5 made it
+ *    enqueue-and-return.
+ * 7: adds GET /test-cases/:id - a pending test case's full row, `spec`
+ *    included. `s2t status`'s testCases[] only ever carried
+ *    id/name/state/contentHash; found while smoke-testing 5.5's
+ *    `awaiting_test_approval` action, which promises to show the human the
+ *    spec before they approve it - a resumed session (no memory of the
+ *    same-turn `draft-test-case` output that originally had it) had no way
+ *    to fetch it back. `GET /requirements/:id` already returned it via
+ *    `SELECT tc.*`, just with no CLI command exposing it standalone.
  */
-export const API_VERSION = 4;
+export const API_VERSION = 7;
 
 interface Provenance {
   drafted_by_model: string;
@@ -196,18 +222,51 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     return { environmentId: id, source: env.openapi_url, text, contentHash: contentHash(text) };
   });
 
+  /** Draft-attempt cap - see migration 004 and criterion.spec_draft_attempts's
+   *  own doc comment. `generate` (codegen) is deterministic templating, so
+   *  there is nothing for a server-side retry loop to repair; the retry that
+   *  matters is the LLM redrafting the spec, which happens above this route
+   *  (the skill/CLI), not inside it. What this route owns is the durable cap
+   *  so that loop cannot spin forever even across sessions. */
+  const MAX_SPEC_DRAFT_ATTEMPTS = 2;
+
+  function specCriterionId(spec: unknown): string | undefined {
+    const id = (spec as { criterionId?: unknown } | null)?.criterionId;
+    return typeof id === 'string' && isUuid(id) ? id : undefined;
+  }
+
   /**
    * Grounds a drafted TestCaseSpec before it becomes a test_case row sitting
    * at Gate 2 - the same `validate-spec` stage `runOnce` (worker/index.ts)
    * runs first, exposed standalone so the plugin CLI's `draft-test-case` can
    * refuse an ungrounded spec at draft time rather than discovering it as a
-   * puzzling failure minutes later. Never writes to Postgres; this route is
-   * a pure check.
+   * puzzling failure minutes later. Never writes to Postgres, with the one
+   * deliberate exception of `criterion.spec_draft_attempts` - counting is
+   * this route's own job, not `test_case`'s, since a spec that never becomes
+   * a `test_case` row (because it keeps failing this check) is exactly the
+   * case the cap exists to catch.
    */
   app.post('/specs/validate', async (req) => {
     const b = req.body as { environment_id: string; spec: unknown };
     if (!isUuid(b.environment_id)) {
       throw new ServiceError('not_found', `environment ${b.environment_id} not found`, 404);
+    }
+
+    const criterionId = specCriterionId(b.spec);
+    if (criterionId) {
+      const { rows: attemptRows } = await pool.query<{ spec_draft_attempts: number }>(
+        'SELECT spec_draft_attempts FROM criterion WHERE id = $1',
+        [criterionId],
+      );
+      const attempts = attemptRows[0]?.spec_draft_attempts;
+      if (attempts !== undefined && attempts >= MAX_SPEC_DRAFT_ATTEMPTS) {
+        throw new ServiceError(
+          'draft_attempts_exhausted',
+          `criterion ${criterionId} has failed /specs/validate ${attempts} times in a row - ` +
+            'stop drafting and ask a human to look at the requirement or the target\'s OpenAPI document',
+          409,
+        );
+      }
     }
 
     const { rows } = await pool.query<{ openapi_url: string }>(
@@ -235,6 +294,14 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
           res.error?.message ?? 'validate-spec crashed with no message',
           502,
         );
+      }
+      // Only a genuine grounding failure counts against the cap - a runner
+      // CLI crash (handled above) is an infrastructure fault, not a bad
+      // drafting attempt, and must not consume the model's retry budget.
+      if (!res.result!.ok && criterionId) {
+        await pool.query('UPDATE criterion SET spec_draft_attempts = spec_draft_attempts + 1 WHERE id = $1', [
+          criterionId,
+        ]);
       }
       return res.result!;
     } finally {
@@ -478,6 +545,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
           b.criterion_id,
         ]);
       }
+      // A real success ends the /specs/validate retry loop for this
+      // criterion - see migration 004 and the cap enforced there.
+      await client.query('UPDATE criterion SET spec_draft_attempts = 0 WHERE id = $1', [b.criterion_id]);
       await client.query('COMMIT');
       return rows[0];
     } catch (err) {
@@ -486,6 +556,24 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     } finally {
       client.release();
     }
+  });
+
+  /**
+   * One test case's full row, `spec` included - what a human needs to see
+   * before deciding Gate 2, and what `GET /requirements/:id` already
+   * returns buried in its `test_cases[]` via `SELECT tc.*`. Added because
+   * `s2t status`'s `testCases[]` never carries `spec` (only
+   * id/name/state/contentHash), so a *resumed* session - no memory of the
+   * same-turn `draft-test-case` output that originally had it - had no way
+   * to show the human what they were approving.
+   */
+  app.get('/test-cases/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) throw new ServiceError('not_found', `test case ${id} not found`, 404);
+
+    const { rows } = await pool.query('SELECT * FROM test_case WHERE id = $1', [id]);
+    if (!rows[0]) throw new ServiceError('not_found', `test case ${id} not found`, 404);
+    return rows[0];
   });
 
   for (const gate of [1, 2] as Gate[]) {
@@ -525,15 +613,21 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
         if (row) {
           requirementId = row.requirement_id;
           if (b.decision === 'rejected') {
-            const { rows: remaining } = await pool.query(
-              `SELECT 1 FROM test_case WHERE criterion_id = $1 AND state <> 'rejected' LIMIT 1`,
-              [row.criterion_id],
-            );
-            if (remaining.length === 0) {
-              await pool.query(`UPDATE criterion SET state = 'uncovered', updated_at = now() WHERE id = $1`, [
-                row.criterion_id,
-              ]);
-            }
+            // Read-then-blind-write on the criterion - same race class as
+            // reconcile.ts's markStale(), so it takes the same requirement-
+            // scoped advisory lock (see db/lock.ts) rather than racing a
+            // concurrent reconcile() for the same requirement.
+            await withRequirementLock(row.requirement_id, async (db) => {
+              const { rows: remaining } = await db.query(
+                `SELECT 1 FROM test_case WHERE criterion_id = $1 AND state <> 'rejected' LIMIT 1`,
+                [row.criterion_id],
+              );
+              if (remaining.length === 0) {
+                await db.query(`UPDATE criterion SET state = 'uncovered', updated_at = now() WHERE id = $1`, [
+                  row.criterion_id,
+                ]);
+              }
+            });
           }
         }
       } else if (outcome.recorded) {
@@ -550,11 +644,14 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   }
 
   /**
-   * Codegen -> validate -> falsify for one approved test case, all
-   * server-side via the runner CLI subprocess (see worker/runnerCli.ts).
-   * Synchronous for this step - see the master plan's step 5 notes: the
-   * `job` row is real and the code path is the one a future background
-   * poller would use, only "return immediately" is deferred.
+   * Enqueues codegen -> validate -> falsify for one approved test case and
+   * returns immediately - the falsification itself can take minutes
+   * (subprocess spawns for the runner CLI, then Playwright inside it), so
+   * this route no longer blocks the caller. The `job` row and `runOnce`
+   * (worker/index.ts) are the real execution; a background poller (started
+   * at the bottom of this file, only on the real listen path) claims and
+   * runs queued jobs. `GET /jobs/:id` below is how a caller learns the
+   * outcome - its own doc comment predates this change and said so.
    */
   app.post('/test-cases/:id/verify', async (req) => {
     const { id } = req.params as { id: string };
@@ -562,6 +659,13 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     if (!b.environment_id) {
       throw new ServiceError('environment_id_required', 'environment_id is required - resolve it via GET /environments/resolve first');
     }
+
+    // A hand-edited generated file must never be silently re-verified and
+    // certified as if it were still the code Gate 2 approved - reopen Gate 2
+    // instead, before even checking `state === 'approved'` below (a drifted
+    // file flips the test case back to 'proposed', so the very next check
+    // correctly refuses it with `test_case_not_approved`).
+    await reopenGate2IfArtifactDrifted(id);
 
     const { rows } = await pool.query<{ state: string; criterion_id: string }>(
       'SELECT state, criterion_id FROM test_case WHERE id = $1',
@@ -590,14 +694,16 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       [requirementId, JSON.stringify({ testCaseId: id, environmentId: b.environment_id })],
     );
 
-    return runOnce(jobRows[0]!.id);
+    // `status`, matching RunOnceResult's field name (worker/index.ts) - not
+    // the job table's own `state` column - so the plugin CLI's verify.ts
+    // reads one consistent field name whether the job just got enqueued or
+    // (via GET /jobs/:id) has since finished.
+    return { jobId: jobRows[0]!.id, status: 'queued' as const };
   });
 
   /**
-   * A job's state, for the skill to poll. `verify` is synchronous today, so a
-   * job is already `done` or `failed` by the time anyone can ask - but this is
-   * the contract the skill polls once the worker loop makes `verify` return
-   * immediately, so `SKILL.md` will not need rewriting when that lands.
+   * A job's state, for the skill/CLI to poll now that `verify` returns
+   * immediately (see the route above).
    */
   app.get('/jobs/:id', async (req) => {
     const { id } = req.params as { id: string };
@@ -610,6 +716,29 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     );
     if (!rows[0]) throw new ServiceError('not_found', `job ${id} not found`, 404);
     return rows[0];
+  });
+
+  /**
+   * The certify verdict + reason for a test case's most recent falsification
+   * run - the diagnostic `verify`'s own response carried inline before
+   * version 5 made it enqueue-and-return. Keyed by test_case_id, not
+   * job_id: the skill calls this straight from `s2t status`'s testCases[],
+   * with no need to have kept a jobId from an earlier turn - the same
+   * resumability discipline every other route here follows. Reuses
+   * latestFalsificationReport()/certifyTestCase() exactly as verification.ts's
+   * own coverage rollup does; no new logic, only a read that was missing.
+   */
+  app.get('/test-cases/:id/verify-result', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) throw new ServiceError('not_found', `test case ${id} not found`, 404);
+
+    const { rows } = await pool.query('SELECT id FROM test_case WHERE id = $1', [id]);
+    if (!rows[0]) throw new ServiceError('not_found', `test case ${id} not found`, 404);
+
+    const report = await latestFalsificationReport(id);
+    if (!report) return { testCaseId: id, hasRun: false, certify: null };
+
+    return { testCaseId: id, hasRun: true, certify: certifyTestCase(report) };
   });
 
   // --- Jira -------------------------------------------------------------
@@ -707,8 +836,8 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   });
 
   /**
-   * Push the verification rollup onto the ticket. The master plan's "ask
-   * before syncing" convention is enforced by the skill, which confirms
+   * Push the verification rollup onto the ticket. The "ask before
+   * syncing" convention is enforced by the skill, which confirms
    * with the developer before ever calling this - not by the route itself.
    */
   app.post('/jira/:issueKey/verification', async (req) => {
@@ -775,4 +904,7 @@ if (process.argv[1]?.endsWith('server.ts')) {
   const port = Number(process.env.PORT ?? 8787);
   await app.listen({ port, host: '127.0.0.1' });
   console.log(`state service listening on http://127.0.0.1:${port}`);
+  // Only started here, never inside buildServer() - see poller.ts's own doc
+  // comment for why app.inject()-based tests must never see this timer.
+  startPoller();
 }

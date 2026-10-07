@@ -53,8 +53,7 @@ describe('loadPrompt against the committed lock', () => {
 });
 
 // Sabotage a real committed prompt file, confirm loadPrompt fails loud, then
-// restore it - the exact check PLAN-5.3-5.7-WALKING-SKELETON.md's
-// Verification section calls for.
+// restore it.
 describe('prompt_hash_mismatch - sabotage and restore', () => {
   const path = join(PROMPTS_DIR, 'criteria.v1.md');
   let original: string;

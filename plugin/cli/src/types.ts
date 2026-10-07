@@ -38,7 +38,7 @@ export interface PipelineState {
 }
 
 /** The three lists `status` derives, so the skill never joins criteria[]
- *  against testCases[] itself - see PLAN-5.3-5.7-WALKING-SKELETON.md 5.3. */
+ *  against testCases[] itself. */
 export interface DerivedLists {
   uncoveredCriteria: PipelineState['criteria'];
   pendingTestCases: PipelineState['testCases'];
@@ -113,11 +113,26 @@ export interface VerificationResult {
   criteria: { id: string; stateAffecting: boolean; covered: boolean }[];
 }
 
+/** `GET /test-cases/:id/verify-result`'s response - the diagnostic `verify`
+ *  used to carry inline before it became enqueue-and-return. `certify` is
+ *  `null` when this test case has never been through a falsification run. */
+export interface VerifyResultResponse {
+  testCaseId: string;
+  hasRun: boolean;
+  certify: { verdict: 'certified' | 'rejected' | 'quarantined'; reason: string } | null;
+}
+
+/**
+ * `POST /test-cases/:id/verify`'s response - as of Step 6's worker loop,
+ * `'queued'` (no `verification` yet, the falsification hasn't run) is the
+ * normal immediate result; `'done'`/`'failed'` only ever come back from
+ * `GET /jobs/:id` once a background poller has processed the job.
+ */
 export interface RunOnceResult {
   jobId: string;
-  status: 'done' | 'failed';
+  status: 'queued' | 'done' | 'failed';
   lastError?: string;
-  verification: VerificationResult;
+  verification?: VerificationResult;
   [key: string]: unknown;
 }
 

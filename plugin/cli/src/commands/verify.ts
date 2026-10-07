@@ -5,8 +5,10 @@ import { createHttpClient } from '../http.ts';
 import { resolveContext } from '../resolve.ts';
 import type { RunOnceResult } from '../types.ts';
 
-/** POST /test-cases/:id/verify is synchronous today - this can block for
- *  minutes. SKILL.md warns before calling it. */
+/** POST /test-cases/:id/verify enqueues a background job and returns
+ *  immediately (Step 6's worker loop) - it no longer blocks for minutes.
+ *  Falsification's outcome is read back later via `GET /jobs/:id`, surfaced
+ *  to the skill through `s2t status`'s `verifying` stage. */
 export async function runVerify(args: ParsedArgs): Promise<never> {
   const command = 'verify';
   const testCaseId = args.flags['test-case-id'];
@@ -24,9 +26,11 @@ export async function runVerify(args: ParsedArgs): Promise<never> {
   if (!res.ok) emitApiFailure(command, res);
 
   const summary =
-    res.body.status === 'done'
-      ? `verified: ${res.body.verification?.state ?? 'unknown'}`
-      : `failed: ${res.body.lastError ?? 'unknown error'}`;
+    res.body.status === 'queued'
+      ? `queued: job ${res.body.jobId} is running in the background - check back with 's2t status'`
+      : res.body.status === 'done'
+        ? `verified: ${res.body.verification?.state ?? 'unknown'}`
+        : `failed: ${res.body.lastError ?? 'unknown error'}`;
 
   emit({ ok: true, command, summary, ...(res.body as object) });
 }

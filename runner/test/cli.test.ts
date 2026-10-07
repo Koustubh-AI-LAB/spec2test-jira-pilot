@@ -113,8 +113,7 @@ describe('runner CLI', () => {
     // Grounding alone would pass this spec and it would generate a
     // green-looking test - but falsification could never certify it, since
     // no kill fault can be derived from this check. See
-    // unparseableAssertionHints's doc comment (deriveKillFaults.ts) and
-    // PLAN-5.3-5.7-WALKING-SKELETON.md 0.3.
+    // unparseableAssertionHints's doc comment (deriveKillFaults.ts).
     const dir = mkdtempSync(join(tmpdir(), 'spec2test-cli-'));
     try {
       const spec = {
@@ -189,7 +188,7 @@ describe('runner CLI', () => {
           criterionId: 'C-CLI-VALIDATE-LIVE',
           name: `cli validate live ${Date.now()}`,
           method: 'POST',
-          path: '/api/users',
+          path: '/users',
           auth: 'none',
           body: {
             user: {

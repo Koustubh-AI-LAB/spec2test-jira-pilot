@@ -9,7 +9,7 @@
  * DATABASE_URL silently won, since their env-loading loop only sets a
  * variable when it is not already set. That is how six stray `P-WORKER*`
  * project rows ended up sitting in the same database `S2T-1`'s real local
- * requirement lives in (see PLAN-5.3-5.7-WALKING-SKELETON.md 0.4).
+ * requirement lives in.
  */
 import { Client } from 'pg';
 import { existsSync, readFileSync } from 'node:fs';

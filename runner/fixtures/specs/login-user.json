@@ -2,7 +2,7 @@
   "criterionId": "C-LOGIN-USER",
   "name": "log in with a known fixture account",
   "method": "POST",
-  "path": "/api/users/login",
+  "path": "/users/login",
   "auth": "none",
   "body": {
     "user": {

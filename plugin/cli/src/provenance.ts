@@ -32,8 +32,7 @@ export class ModelIdInvalidError extends Error {
  * caller's choice, not always the OpenAPI document: criteria are drafted
  * from the ticket's own text, not the schema, so their honest grounding_hash
  * is contentHash(ticket.requirementText); a TestCaseSpec is drafted against
- * the OpenAPI grounding, so its grounding_hash is that document's hash. See
- * PLAN-5.3-5.7-WALKING-SKELETON.md 5.4, "Which grounding".
+ * the OpenAPI grounding, so its grounding_hash is that document's hash.
  */
 export function buildProvenance(args: {
   model: string;

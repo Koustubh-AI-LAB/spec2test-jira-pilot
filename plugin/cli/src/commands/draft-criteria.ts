@@ -11,8 +11,7 @@ import type { RequirementRow } from '../types.ts';
  * design, the record of the whole drafting act. --model/prompt-lock are
  * still validated here even though nothing is forwarded: it is what catches
  * a stale prompt or a bad model id before a POST, and keeps this command's
- * own stdout self-documenting. See PLAN-5.3-5.7-WALKING-SKELETON.md 5.4,
- * "Which grounding, and one honesty problem worth naming".
+ * own stdout self-documenting.
  */
 export async function runDraftCriteria(args: ParsedArgs): Promise<never> {
   const command = 'draft-criteria';

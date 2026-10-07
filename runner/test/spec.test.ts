@@ -169,6 +169,32 @@ describe('validateSpec', () => {
     });
   });
 
+  it('rejects a {{...}} placeholder inside an assertion check - it is never substituted there', () => {
+    const templated: TestCaseSpec = {
+      ...grounded,
+      assertions: [{ name: 'slug_matches', check: "body.article.slug === '{{capture.slug}}'" }],
+    };
+    assert.throws(() => validateSpec(templated, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_template_in_check');
+      assert.match(err.message, /never in a check/);
+      return true;
+    });
+  });
+
+  it('rejects {{unique}} in a path - it can never match the recorded replay transcript', () => {
+    const uniquePath: TestCaseSpec = { ...grounded, path: '/api/users/{{unique}}' };
+    assert.throws(() => validateSpec(uniquePath, schema), (err: unknown) => {
+      assert.ok(err instanceof RunnerError);
+      assert.equal(err.event, 'spec_unique_in_path');
+      return true;
+    });
+  });
+
+  it('still allows {{unique}} in a body and {{capture.x}} in a path', () => {
+    assert.doesNotThrow(() => validateSpec(grounded, schema));
+  });
+
   it('rejects a forward reference - a capture declared by a LATER step', () => {
     const forward: TestCaseSpec = {
       ...grounded,
@@ -275,7 +301,7 @@ describe('validateSpec', () => {
   });
 });
 
-// See PLAN-5.3-5.7-WALKING-SKELETON.md 0.3: unparseableAssertionHints is what
+// unparseableAssertionHints is what
 // lets validate-spec (runner/src/cli.ts) surface, at draft time, an assertion
 // that will silently derive zero kill faults - the same shape
 // brittle-login-snapshot.json's own fixture exercises live, but never had a

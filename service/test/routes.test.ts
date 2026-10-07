@@ -182,6 +182,114 @@ describe('POST /specs/validate', () => {
   });
 });
 
+describe('POST /specs/validate - draft-attempt cap (Step 6)', () => {
+  async function seedCriterion(issueKey: string) {
+    const p = await project();
+    const req = (
+      await send('POST', '/requirements', {
+        project_id: p.id,
+        jira_issue_key: issueKey,
+        title: 't',
+        body: 'b',
+        ...PROVENANCE,
+      })
+    ).body.requirement;
+    return (await send('POST', `/requirements/${req.id}/criteria`, { criteria: [{ body: 'x' }] })).body
+      .criteria[0] as { id: string; content_hash: string };
+  }
+
+  function ungroundedSpec(criterionId: string) {
+    return {
+      criterionId,
+      name: 'n',
+      method: 'GET',
+      path: '/api/does-not-exist',
+      auth: 'none',
+      assertions: [{ name: 'a', check: 'status === 200' }],
+    };
+  }
+
+  it('refuses outright with draft_attempts_exhausted after 2 consecutive failed validations for the same criterion', async () => {
+    const path = join(scratch, 'cap-narrow.yml');
+    writeFileSync(path, 'openapi: 3.0.0\npaths: {}\n');
+    const env = await environment((await project()).id, 'http://localhost:4100', path);
+    const criterion = await seedCriterion('CAP-1');
+
+    const first = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.ok, false);
+    const second = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(second.status, 200);
+    assert.equal(second.body.ok, false);
+
+    const third = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(third.status, 409);
+    assert.equal(third.body.event, 'draft_attempts_exhausted');
+  });
+
+  it('a runner-CLI crash never counts against the cap - only a genuine grounding failure does', async () => {
+    // A malformed environment id reaching a real /specs/validate call is out
+    // of scope here (caught earlier, before the cap check); this instead
+    // confirms two REAL failures are required, not that any two calls trip
+    // it - see the previous test for the positive case.
+    const path = join(scratch, 'cap-count.yml');
+    writeFileSync(path, 'openapi: 3.0.0\npaths:\n  /api/articles:\n    get: {}\n');
+    const env = await environment((await project()).id, 'http://localhost:4102', path);
+    const criterion = await seedCriterion('CAP-3');
+    const grounded = {
+      criterionId: criterion.id,
+      name: 'ok',
+      method: 'GET',
+      path: '/api/articles',
+      auth: 'none',
+      assertions: [{ name: 'a', check: 'status === 200' }],
+    };
+
+    // A successful validation must not itself count as a failed attempt.
+    await send('POST', '/specs/validate', { environment_id: env.id, spec: grounded });
+    const stillOpen = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(stillOpen.status, 200, 'a prior success must not count toward the cap');
+  });
+
+  it('a successful POST /test-cases resets the counter for that criterion', async () => {
+    const path = join(scratch, 'cap-wide.yml');
+    writeFileSync(path, 'openapi: 3.0.0\npaths:\n  /api/articles:\n    get: {}\n');
+    const env = await environment((await project()).id, 'http://localhost:4101', path);
+    const criterion = await seedCriterion('CAP-2');
+    await send('POST', '/gate1/decisions', {
+      subject_id: criterion.id,
+      decision: 'approved',
+      actor: 'po@example.com',
+      channel: 'jira',
+      seen_hash: criterion.content_hash,
+    });
+
+    // One failed attempt, then a real success.
+    await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    const grounded = {
+      criterionId: criterion.id,
+      name: 'ok',
+      method: 'GET',
+      path: '/api/articles',
+      auth: 'none',
+      assertions: [{ name: 'a', check: 'status === 200' }],
+    };
+    const validated = await send('POST', '/specs/validate', { environment_id: env.id, spec: grounded });
+    assert.equal(validated.body.ok, true);
+    await send('POST', '/test-cases', { criterion_id: criterion.id, name: 'ok case', kind: 'api', spec: grounded, ...PROVENANCE });
+
+    // The counter must read 0 again - two more failures are allowed before
+    // the cap trips, not just one.
+    const a = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(a.status, 200, 'counter was not reset after a successful test-case draft');
+    const b = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(b.status, 200);
+    const c = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    assert.equal(c.status, 409);
+    assert.equal(c.body.event, 'draft_attempts_exhausted');
+  });
+});
+
 describe('GET /environments/:id/grounding', () => {
   it('returns the document and its hash, from a file path', async () => {
     const path = join(scratch, 'openapi.yml');
@@ -298,6 +406,74 @@ describe('GET /pipeline/:issueKey', () => {
     assert.equal(res.body.criteria[0].contentHash, contentHash('rule'));
     assert.equal(res.body.criteria[0].stateAffecting, true);
     assert.equal(res.body.jira.criteriaPosted, false);
+  });
+
+  it('reports experimentCount per criterion - a raw fault_experiment row count, Step 6\'s "measure, don\'t cap" (#25)', async () => {
+    const p = await project();
+    const env = await environment(p.id, 'http://localhost:4200');
+    const hash = contentHash('t\n\nb');
+    const { rows: reqRows } = await getPool().query(
+      `INSERT INTO requirement
+         (project_id, jira_issue_key, title, body, source_text_hash, state,
+          drafted_by_model, prompt_version, grounding_hash)
+       VALUES ($1,$2,'t','b',$3,'awaiting_requirement_approval','m','v','g') RETURNING id`,
+      [p.id, ISSUE, hash],
+    );
+    const requirementId = reqRows[0].id;
+    const criterion = (
+      await send('POST', `/requirements/${requirementId}/criteria`, { criteria: [{ body: 'rule' }] })
+    ).body.criteria[0];
+    // /test-cases requires gate 1 closed on the criterion first.
+    await send('POST', '/gate1/decisions', {
+      subject_id: criterion.id,
+      decision: 'approved',
+      actor: 'po@example.com',
+      channel: 'jira',
+      seen_hash: criterion.content_hash,
+    });
+    const testCase = (
+      await send('POST', '/test-cases', {
+        criterion_id: criterion.id,
+        name: 'n',
+        kind: 'api',
+        spec: { method: 'GET', path: '/x' },
+        ...PROVENANCE,
+      })
+    ).body;
+    assert.ok(testCase.id, `premise: test case must be created, got ${JSON.stringify(testCase)}`);
+    // Not routed through gate 2 or verify beyond that - this test is only
+    // about the count query, so the fault_experiment rows are seeded
+    // directly, exactly as worker/index.ts's persistComplete would write them.
+    const { rows: runRows } = await getPool().query(
+      `INSERT INTO run (requirement_id, environment_id, kind, state) VALUES ($1,$2,'falsification','complete') RETURNING id`,
+      [requirementId, env.id],
+    );
+    for (const verdict of ['kill', 'survive', 'kill']) {
+      await getPool().query(
+        `INSERT INTO fault_experiment (run_id, criterion_id, test_case_id, set_kind, spec, verdict)
+         VALUES ($1,$2,$3,'kill','{}',$4)`,
+        [runRows[0].id, criterion.id, testCase.id, verdict],
+      );
+    }
+
+    const res = await send('GET', `/pipeline/${ISSUE}?project_id=${p.id}`);
+    assert.equal(res.body.criteria[0].experimentCount, 3);
+  });
+
+  it('reports experimentCount: 0 for a criterion with no fault_experiment rows yet', async () => {
+    const p = await project();
+    const hash = contentHash('t\n\nb');
+    const { rows } = await getPool().query(
+      `INSERT INTO requirement
+         (project_id, jira_issue_key, title, body, source_text_hash, state,
+          drafted_by_model, prompt_version, grounding_hash)
+       VALUES ($1,$2,'t','b',$3,'awaiting_requirement_approval','m','v','g') RETURNING id`,
+      [p.id, ISSUE, hash],
+    );
+    await send('POST', `/requirements/${rows[0].id}/criteria`, { criteria: [{ body: 'rule' }] });
+
+    const res = await send('GET', `/pipeline/${ISSUE}?project_id=${p.id}`);
+    assert.equal(res.body.criteria[0].experimentCount, 0);
   });
 
   it('scopes the resume lookup by project - two projects sharing a Jira issue key never see each other requirement', async () => {

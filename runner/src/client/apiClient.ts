@@ -111,7 +111,7 @@ function locate(body: unknown, path: string[]): { parent: Record<string, unknown
 
 /**
  * Applies one mutation to a real response, reporting whether it actually
- * changed anything - the TestForge "P0.0" lesson: a mutation whose target
+ * changed anything - a hard-won lesson: a mutation whose target
  * path isn't present in this particular response had no effect, and a
  * resulting pass must never be read as "the assertion survived a real
  * fault." `response` is never mutated in place; a fresh copy is returned.

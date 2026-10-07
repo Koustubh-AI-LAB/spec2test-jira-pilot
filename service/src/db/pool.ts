@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
 
-// connect_timeout is not optional here. TestForge hit exactly this: with no
-// timeout, an unreachable Postgres hangs the TCP handshake for minutes and the
-// caller looks stuck rather than broken.
+// connect_timeout is not optional here: with no timeout, an unreachable
+// Postgres hangs the TCP handshake for minutes and the caller looks stuck
+// rather than broken.
 const CONNECT_TIMEOUT_MS = 5_000;
 
 let appPool: Pool | undefined;

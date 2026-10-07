@@ -17,6 +17,7 @@ import type { FastifyInstance } from 'fastify';
 import { getPool, getAdminPool, closePool } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { buildServer } from '../src/api/server.ts';
+import { runOnce } from '../src/worker/index.ts';
 import { computeVerification } from '../src/verification.ts';
 import { loadDotEnvExceptDatabase, TEST_DATABASE_URL } from './helpers/db.ts';
 
@@ -139,7 +140,7 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
       criterionId: 'C-WORKER-REGISTER',
       name: `worker register user ${Date.now()}`,
       method: 'POST',
-      path: '/api/users',
+      path: '/users',
       auth: 'none',
       body: {
         user: {
@@ -155,8 +156,13 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     };
     const { requirement, testCase } = await seedApprovedTestCase('WORKER-OK', spec);
 
-    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
-    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const enqueued = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
+    assert.equal(enqueued.status, 200, JSON.stringify(enqueued.body));
+    assert.equal(enqueued.body.status, 'queued', JSON.stringify(enqueued.body));
+    // Step 6: verify only enqueues now - drive the job to completion directly
+    // (the same function the real background poller calls) rather than
+    // through a real setInterval, which this test has no reason to wait on.
+    const res = { body: await runOnce(enqueued.body.jobId) };
     assert.equal(res.body.status, 'done', JSON.stringify(res.body));
     assert.equal(res.body.certify.verdict, 'certified', JSON.stringify(res.body.certify));
     assert.ok(res.body.falsification.verdicts.length > 0);
@@ -199,7 +205,7 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
       criterionId: 'C-WORKER-WEAK',
       name: `worker weak assertion ${Date.now()}`,
       method: 'POST',
-      path: '/api/users',
+      path: '/users',
       auth: 'none',
       body: {
         user: {
@@ -215,8 +221,9 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     };
     const { requirement, testCase } = await seedApprovedTestCase('WORKER-WEAK', spec);
 
-    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
-    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const enqueued = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
+    assert.equal(enqueued.status, 200, JSON.stringify(enqueued.body));
+    const res = { body: await runOnce(enqueued.body.jobId) };
     assert.equal(res.body.status, 'done', JSON.stringify(res.body));
     assert.equal(res.body.certify.verdict, 'rejected');
     assert.match(res.body.certify.reason, /no kill faults/);
@@ -270,8 +277,9 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
       assertions: [{ name: 'responds', check: 'status === 201' }],
     });
 
-    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
-    assert.equal(res.status, 200);
+    const enqueued = await post(`/test-cases/${testCase.id}/verify`, { environment_id: environmentId });
+    assert.equal(enqueued.status, 200);
+    const res = { body: await runOnce(enqueued.body.jobId) };
     assert.equal(res.body.status, 'failed');
     assert.match(res.body.lastError, /spec_not_grounded/);
 
@@ -294,11 +302,16 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     });
 
     // Well-formed but unresolvable: the verify route checks environment_id is
-    // present, never that it exists, so loadContext is where this dies.
-    const res = await post(`/test-cases/${testCase.id}/verify`, {
+    // present, never that it exists, so loadContext is where this dies - and
+    // since Step 6, that's inside runOnce (called by the poller), not inside
+    // the route itself, which only enqueues.
+    const enqueued = await post(`/test-cases/${testCase.id}/verify`, {
       environment_id: '00000000-0000-0000-0000-000000000000',
     });
-    assert.equal(res.status, 404);
+    assert.equal(enqueued.status, 200, JSON.stringify(enqueued.body));
+    assert.equal(enqueued.body.status, 'queued');
+
+    await assert.rejects(() => runOnce(enqueued.body.jobId));
 
     const { rows } = await getPool().query<{ state: string }>(
       'SELECT state FROM job WHERE requirement_id = $1 ORDER BY created_at DESC LIMIT 1',

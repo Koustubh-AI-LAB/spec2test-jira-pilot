@@ -5,7 +5,7 @@
     {
       "name": "register the author",
       "method": "POST",
-      "path": "/api/users",
+      "path": "/users",
       "auth": "none",
       "body": {
         "user": {
@@ -19,7 +19,7 @@
     {
       "name": "register the intruder",
       "method": "POST",
-      "path": "/api/users",
+      "path": "/users",
       "auth": "none",
       "body": {
         "user": {
@@ -33,7 +33,7 @@
     {
       "name": "the author creates an article",
       "method": "POST",
-      "path": "/api/articles",
+      "path": "/articles",
       "auth": "user",
       "authToken": "{{capture.authorToken}}",
       "body": {
@@ -48,7 +48,7 @@
     }
   ],
   "method": "PUT",
-  "path": "/api/articles/{{capture.slug}}",
+  "path": "/articles/{{capture.slug}}",
   "auth": "user",
   "authToken": "{{capture.intruderToken}}",
   "body": {

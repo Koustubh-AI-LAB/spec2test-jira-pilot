@@ -4,5 +4,5 @@
   "sourceCommit": "ebbcdeb8d55b42a3a613c787560498b8ef10003f",
   "sourcePath": "specs/api/openapi.yml",
   "vendoredAt": "2026-09-15",
-  "note": "The master plan cites api/openapi.yml, which is stale - the repo was restructured and the live path is specs/api/openapi.yml."
+  "note": "Older references cite api/openapi.yml, which is stale - the repo was restructured and the live path is specs/api/openapi.yml."
 }

@@ -15,8 +15,10 @@ import { runRedraft } from './commands/redraft.ts';
 import { runGrounding } from './commands/grounding.ts';
 import { runPostCriteria } from './commands/post-criteria.ts';
 import { runDraftTestCase } from './commands/draft-test-case.ts';
+import { runGetTestCase } from './commands/get-test-case.ts';
 import { runApproveTestCase } from './commands/approve-test-case.ts';
 import { runVerify } from './commands/verify.ts';
+import { runVerifyResult } from './commands/verify-result.ts';
 import { runSync } from './commands/sync.ts';
 
 export interface ParsedArgs {
@@ -75,8 +77,10 @@ const COMMANDS: Record<string, (args: ParsedArgs) => Promise<never>> = {
   grounding: runGrounding,
   'post-criteria': runPostCriteria,
   'draft-test-case': runDraftTestCase,
+  'get-test-case': runGetTestCase,
   'approve-test-case': runApproveTestCase,
   verify: runVerify,
+  'verify-result': runVerifyResult,
   sync: runSync,
 };
 

@@ -99,7 +99,7 @@ async function hasRunningJob(requirementId: string): Promise<boolean> {
 
 /**
  * Every test case under `requirementId` that has ever been through a
- * falsification run - not "certified" (see `isCriterionCovered` below,
+ * falsification run - not "certified" (see `coverageForCriterion` below,
  * which is a stricter, different question). Shared so `pipeline.ts`'s
  * `testCases[].verified` field can't independently drift from what this
  * module considers "attempted."
@@ -114,22 +114,47 @@ export async function verifiedTestCaseIds(requirementId: string): Promise<Set<st
   return new Set(rows.map((r) => r.test_case_id));
 }
 
-async function isCriterionCovered(criterionId: string): Promise<boolean> {
+interface CoverageDetail {
+  covered: boolean;
+  /**
+   * True when this criterion is not covered, but every test case that has
+   * been through `verify` came back `'quarantined'` (environment unstable -
+   * most commonly the target being unreachable, see
+   * runFalsification.ts's control-run health check) with no genuine
+   * `'rejected'` verdict anywhere. A quarantined run proves nothing either
+   * way; `decideVerificationState` below must never let it read as a
+   * regression. False whenever nothing has been attempted yet, or the
+   * criterion is `'uncovered'` (no live test case at all - a different,
+   * non-quarantine reason for having no coverage).
+   */
+  quarantinedOnly: boolean;
+}
+
+async function coverageForCriterion(criterionId: string): Promise<CoverageDetail> {
   const { rows: testCases } = await getPool().query<TestCaseRow>(
     `SELECT id FROM test_case WHERE criterion_id = $1 AND state = 'approved'`,
     [criterionId],
   );
+  let anyAttempted = false;
+  let anyQuarantined = false;
+  let anyNonQuarantined = false;
   for (const tc of testCases) {
     const report = await latestFalsificationReport(tc.id);
-    if (report && certifyTestCase(report).verdict === 'certified') return true;
+    if (!report) continue;
+    anyAttempted = true;
+    const verdict = certifyTestCase(report).verdict;
+    if (verdict === 'certified') return { covered: true, quarantinedOnly: false };
+    if (verdict === 'quarantined') anyQuarantined = true;
+    else anyNonQuarantined = true;
   }
-  return false;
+  return { covered: false, quarantinedOnly: anyAttempted && anyQuarantined && !anyNonQuarantined };
 }
 
 export interface CriterionCoverage {
   id: string;
   stateAffecting: boolean;
   covered: boolean;
+  quarantinedOnly: boolean;
 }
 
 /**
@@ -157,6 +182,18 @@ export function decideVerificationState(input: {
   const allCovered = input.coverage.every((c) => c.covered);
   if (allCovered) return 'contract_verified';
 
+  // A target outage (or any environment instability) that quarantines every
+  // fault this run tried proves nothing either way - it must never read as a
+  // regression. Only fall through to failing/weak once at least one
+  // uncovered criterion has a genuine, non-quarantine shortfall (a real
+  // 'rejected' verdict, or a criterion that has simply never been attempted
+  // at all). Per the failure-mode table: re-verifying a
+  // Contract-Verified requirement while the target happens to be down must
+  // preserve that state, not silently report Failing for a run that proved
+  // nothing.
+  const uncovered = input.coverage.filter((c) => !c.covered);
+  if (uncovered.length > 0 && uncovered.every((c) => c.quarantinedOnly)) return 'unchanged';
+
   // "failing" (a regression) vs "weak" (never fully covered) is read off the
   // requirement's own current state, rather than a separate history column -
   // it already remembers whether full coverage was ever reached.
@@ -182,11 +219,11 @@ export async function computeVerification(requirementId: string): Promise<Verifi
 
   const coverage: CriterionCoverage[] = gate1Closed && !runningJob
     ? await Promise.all(
-        nonRejected.map(async (c) => ({
-          id: c.id,
-          stateAffecting: c.state_affecting,
-          covered: c.state === 'uncovered' ? false : await isCriterionCovered(c.id),
-        })),
+        nonRejected.map(async (c) => {
+          const detail: CoverageDetail =
+            c.state === 'uncovered' ? { covered: false, quarantinedOnly: false } : await coverageForCriterion(c.id);
+          return { id: c.id, stateAffecting: c.state_affecting, ...detail };
+        }),
       )
     : [];
 

@@ -2,7 +2,7 @@
   "criterionId": "C-BRITTLE-LOGIN-SNAPSHOT",
   "name": "brittle full-user snapshot on login (deliberately bad, for the Immunity check)",
   "method": "POST",
-  "path": "/api/users/login",
+  "path": "/users/login",
   "auth": "none",
   "body": {
     "user": {

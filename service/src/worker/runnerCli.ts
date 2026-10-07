@@ -3,8 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * The one place service/ shells out to runner/ - see runner/src/errors.ts
- * and the master plan's "the worker shells out to runner/": the two
+ * The one place service/ shells out to runner/ - see runner/src/errors.ts:
+ * the two
  * workspaces are wired together through this subprocess boundary, never
  * through a shared TypeScript import. `node.exe` itself (not a `.cmd`
  * wrapper) is spawned directly, so - unlike runner's own `playwright.cmd`

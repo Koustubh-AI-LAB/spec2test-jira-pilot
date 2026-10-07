@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { getPool } from '../db/pool.ts';
 import { audit } from '../audit.ts';
 import { contentHash } from '../hash.ts';
@@ -186,4 +187,44 @@ export async function approvalIsCurrent(
   );
   const approved = rows[0];
   return Boolean(approved) && approved.subject_hash === contentHash(currentContent);
+}
+
+/**
+ * Reopens Gate 2 if the generated file on disk no longer matches what
+ * `verify` last wrote (`test_case.artifact_path`/`artifact_hash`,
+ * `worker/index.ts`'s `persistComplete`) - a hand-edited generated test must
+ * never be silently re-verified/certified as the code Gate 2 approved.
+ *
+ * Deliberately NOT `approvalIsCurrent()`: that function compares against
+ * `approval.subject_hash`, which for a test_case is the hash of the
+ * *TestCaseSpec JSON* captured at Gate-2-approval time
+ * (`approve-test-case.ts`'s `--seen-hash`), not the generated `.spec.ts`
+ * file's content - a different artifact that doesn't exist yet at approval
+ * time (codegen runs later, during `verify`). Feeding the on-disk file into
+ * `approvalIsCurrent()` would compare it against the wrong hash and never
+ * match, even for an untouched file. `artifact_hash` is the right value to
+ * compare against; migration 001's own column comment says so directly.
+ */
+export async function reopenGate2IfArtifactDrifted(testCaseId: string): Promise<{ reopened: boolean }> {
+  const pool = getPool();
+  const { rows } = await pool.query<{ state: string; artifact_path: string; artifact_hash: string }>(
+    'SELECT state, artifact_path, artifact_hash FROM test_case WHERE id = $1',
+    [testCaseId],
+  );
+  const row = rows[0];
+  // Nothing to compare against yet (never verified) or already reopened.
+  if (!row || row.state !== 'approved' || !row.artifact_path) return { reopened: false };
+  if (!existsSync(row.artifact_path)) return { reopened: false };
+
+  const onDiskHash = contentHash(readFileSync(row.artifact_path, 'utf8'));
+  if (onDiskHash === row.artifact_hash) return { reopened: false };
+
+  await pool.query(`UPDATE test_case SET state = 'proposed', updated_at = now() WHERE id = $1`, [testCaseId]);
+  await audit({
+    event: 'test_case_artifact_drift_reopened_gate2',
+    subject: `test_case:${testCaseId}`,
+    actor: 'system',
+    detail: { artifact_path: row.artifact_path, approved_hash: row.artifact_hash, on_disk_hash: onDiskHash },
+  });
+  return { reopened: true };
 }

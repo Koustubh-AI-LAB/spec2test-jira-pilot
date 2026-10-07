@@ -55,7 +55,8 @@ const ENVIRONMENT = {
 };
 
 function programHappyPath(): void {
-  stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 4 } });
+  stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 7 } });
+  stub.respond('GET', '/health', { status: 200, body: { status: 'ok' } });
   stub.respond('GET', '/jira/preflight', {
     status: 200,
     body: { ok: true, accountId: 'a', displayName: 'd', base: 'https://x', fields: {} },
@@ -69,7 +70,7 @@ function programHappyPath(): void {
 }
 
 describe('s2t preflight', () => {
-  it('passes all ten checks against a fully-configured stack', async () => {
+  it('passes all eleven checks against a fully-configured stack', async () => {
     programHappyPath();
     const res = await runCli(['preflight'], env());
     assert.equal(res.status, 0, JSON.stringify(res.stdout));
@@ -97,8 +98,22 @@ describe('s2t preflight', () => {
     assert.equal((res.stdout as { event: string }).event, 'api_version_mismatch');
   });
 
+  it('fails loud when the service is up but Postgres is not', async () => {
+    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 7 } });
+    stub.respond('GET', '/health', {
+      status: 503,
+      body: { event: 'db_unreachable', message: 'connect ECONNREFUSED 127.0.0.1:5435' },
+    });
+    const res = await runCli(['preflight'], env());
+    assert.equal(res.status, 0);
+    const body = res.stdout as { event: string; remedy: string };
+    assert.equal(body.event, 'postgres_unreachable');
+    assert.match(body.remedy, /docker compose/);
+  });
+
   it('propagates a Jira preflight failure', async () => {
-    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 4 } });
+    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 7 } });
+    stub.respond('GET', '/health', { status: 200, body: { status: 'ok' } });
     stub.respond('GET', '/jira/preflight', {
       status: 400,
       body: { event: 'jira_field_not_found', message: 'customfield_10107 does not exist' },
@@ -109,7 +124,8 @@ describe('s2t preflight', () => {
   });
 
   it('fails loud when the target base URL is not in the environment allowlist', async () => {
-    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 4 } });
+    stub.respond('GET', '/version', { status: 200, body: { service: 's', apiVersion: 7 } });
+    stub.respond('GET', '/health', { status: 200, body: { status: 'ok' } });
     stub.respond('GET', '/jira/preflight', {
       status: 200,
       body: { ok: true, accountId: 'a', displayName: 'd', base: 'https://x', fields: {} },

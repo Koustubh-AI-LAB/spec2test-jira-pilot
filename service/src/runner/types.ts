@@ -65,8 +65,7 @@ export interface GenerateResult {
  *  runs before anything is generated.
  *
  *  `hints` (added for step 5.3's plugin CLI, populated once runner/'s
- *  validate-spec exports `parseCheck` - see PLAN-5.3-5.7-WALKING-SKELETON.md
- *  0.3) names every assertion whose `check` can't derive a kill fault: the
+ *  validate-spec exports `parseCheck`) names every assertion whose `check` can't derive a kill fault: the
  *  spec would still pass grounding and generate a green-looking test, but the
  *  criterion can never be certified - falsification would quarantine it with
  *  no assertion ever having run. Surfacing this at draft time, rather than
