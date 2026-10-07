@@ -176,10 +176,9 @@ describe('gate 1', () => {
     assert.equal(res.body.recorded, true);
     assert.equal(res.body.state, 'approved');
 
-    const approvals = await getPool().query(
-      "SELECT * FROM approval WHERE subject_id = $1 AND gate = 1",
-      [criterion.id],
-    );
+    const approvals = await getPool().query('SELECT * FROM approval WHERE subject_id = $1 AND gate = 1', [
+      criterion.id,
+    ]);
     assert.equal(approvals.rowCount, 1);
     assert.equal(approvals.rows[0].actor, 'po@example.com');
     assert.equal(approvals.rows[0].channel, 'jira');
@@ -233,9 +232,8 @@ describe('gate 1', () => {
 describe('gate 2 and segregation of duties', () => {
   it('flags when one actor satisfies both gates', async () => {
     const { requirement } = await seedRequirement('SOD-1');
-    const criterion = (
-      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
-    ).body.criteria[0];
+    const criterion = (await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] }))
+      .body.criteria[0];
 
     await post('/gate1/decisions', {
       subject_id: criterion.id,
@@ -268,9 +266,8 @@ describe('gate 2 and segregation of duties', () => {
 
   it('does not flag when the two gates had different actors', async () => {
     const { requirement } = await seedRequirement('SOD-2');
-    const criterion = (
-      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'another rule' }] })
-    ).body.criteria[0];
+    const criterion = (await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'another rule' }] }))
+      .body.criteria[0];
 
     await post('/gate1/decisions', {
       subject_id: criterion.id,
@@ -310,9 +307,8 @@ describe('gate 2 and segregation of duties', () => {
 describe('gate 2 rejection and redraft', () => {
   async function seedApprovedCriterion(issueKey: string) {
     const { requirement } = await seedRequirement(issueKey);
-    const criterion = (
-      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
-    ).body.criteria[0];
+    const criterion = (await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] }))
+      .body.criteria[0];
     await post('/gate1/decisions', {
       subject_id: criterion.id,
       decision: 'approved',
@@ -446,10 +442,7 @@ describe('audit ledger is append-only at the privilege level', () => {
   });
 
   it('refuses an UPDATE from the application role', async () => {
-    await assert.rejects(
-      getPool().query("UPDATE audit_event SET actor = 'tampered'"),
-      /permission denied/i,
-    );
+    await assert.rejects(getPool().query("UPDATE audit_event SET actor = 'tampered'"), /permission denied/i);
   });
 
   it('refuses a DELETE from the application role', async () => {
@@ -468,10 +461,7 @@ describe('redraft', () => {
 
     // Simulate what drift does: mark everything stale, the way reconcile.ts's
     // markStale would after the requirement text changed under an approval.
-    await getPool().query(
-      `UPDATE criterion SET state = 'stale' WHERE requirement_id = $1`,
-      [requirement.id],
-    );
+    await getPool().query(`UPDATE criterion SET state = 'stale' WHERE requirement_id = $1`, [requirement.id]);
     await getPool().query(`UPDATE requirement SET state = 'stale' WHERE id = $1`, [requirement.id]);
 
     const res = await post(`/requirements/${requirement.id}/redraft`, {
@@ -489,10 +479,7 @@ describe('redraft', () => {
 
     // Ordinal 1 kept its id: a criterion reworded in a redraft is still the
     // same criterion for approval-history purposes, not a new row.
-    assert.equal(
-      res.body.criteria.find((c: { ordinal: number }) => c.ordinal === 1).id,
-      c1[0].id,
-    );
+    assert.equal(res.body.criteria.find((c: { ordinal: number }) => c.ordinal === 1).id, c1[0].id);
   });
 
   it('drops criteria beyond the new count rather than leaving them behind', async () => {
@@ -507,11 +494,13 @@ describe('redraft', () => {
       ...PROVENANCE,
     });
 
-    const { rows } = await getPool().query(
-      'SELECT ordinal FROM criterion WHERE requirement_id = $1 ORDER BY ordinal',
-      [requirement.id],
+    const { rows } = await getPool().query('SELECT ordinal FROM criterion WHERE requirement_id = $1 ORDER BY ordinal', [
+      requirement.id,
+    ]);
+    assert.deepEqual(
+      rows.map((r) => r.ordinal),
+      [1],
     );
-    assert.deepEqual(rows.map((r) => r.ordinal), [1]);
   });
 
   it('refuses to redraft a requirement that is already closed', async () => {
@@ -541,9 +530,8 @@ describe('redraft', () => {
 describe('generated-file hash drift reopens gate 2 (Step 6)', () => {
   async function seedApprovedTestCase(issueKey: string) {
     const { requirement } = await seedRequirement(issueKey);
-    const criterion = (
-      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
-    ).body.criteria[0];
+    const criterion = (await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] }))
+      .body.criteria[0];
     await post('/gate1/decisions', {
       subject_id: criterion.id,
       decision: 'approved',
@@ -598,7 +586,9 @@ describe('generated-file hash drift reopens gate 2 (Step 6)', () => {
     // The hand-edit: someone changed the generated file after it was verified.
     writeFileSync(filePath, "test('x', async () => { /* edited by hand */ });\n", 'utf8');
 
-    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: '00000000-0000-4000-8000-000000000000' });
+    const res = await post(`/test-cases/${testCase.id}/verify`, {
+      environment_id: '00000000-0000-4000-8000-000000000000',
+    });
     assert.equal(res.status, 400, JSON.stringify(res.body));
     assert.equal(res.body.event, 'test_case_not_approved');
     assert.equal(await testCaseState(testCase.id), 'proposed', 'gate 2 was not reopened');
@@ -619,7 +609,9 @@ describe('generated-file hash drift reopens gate 2 (Step 6)', () => {
     const { testCase } = await seedApprovedTestCase('DRIFT-2');
     await simulateVerifiedArtifact(testCase.id, filePath, content);
 
-    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: '00000000-0000-4000-8000-000000000000' });
+    const res = await post(`/test-cases/${testCase.id}/verify`, {
+      environment_id: '00000000-0000-4000-8000-000000000000',
+    });
     // Reaches the real enqueue path now (state is still 'approved') - status
     // 200/queued, not the 400 the drift case produces.
     assert.equal(res.status, 200, JSON.stringify(res.body));
@@ -631,7 +623,9 @@ describe('generated-file hash drift reopens gate 2 (Step 6)', () => {
     const { testCase } = await seedApprovedTestCase('DRIFT-3');
     assert.equal(await testCaseState(testCase.id), 'approved');
 
-    const res = await post(`/test-cases/${testCase.id}/verify`, { environment_id: '00000000-0000-4000-8000-000000000000' });
+    const res = await post(`/test-cases/${testCase.id}/verify`, {
+      environment_id: '00000000-0000-4000-8000-000000000000',
+    });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.status, 'queued');
   });
@@ -640,9 +634,8 @@ describe('generated-file hash drift reopens gate 2 (Step 6)', () => {
 describe('GET /test-cases/:id/verify-result (Step 6 gap fix: verify no longer returns this inline)', () => {
   async function seedApprovedTestCase(issueKey: string) {
     const { requirement } = await seedRequirement(issueKey);
-    const criterion = (
-      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
-    ).body.criteria[0];
+    const criterion = (await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] }))
+      .body.criteria[0];
     await post('/gate1/decisions', {
       subject_id: criterion.id,
       decision: 'approved',
@@ -675,7 +668,11 @@ describe('GET /test-cases/:id/verify-result (Step 6 gap fix: verify no longer re
     environmentId: string,
     criterionId: string,
     testCaseId: string,
-    faults: { kind: 'kill' | 'immunity'; verdict: 'kill' | 'survive' | 'inconclusive' | 'quarantined'; detail: string }[],
+    faults: {
+      kind: 'kill' | 'immunity';
+      verdict: 'kill' | 'survive' | 'inconclusive' | 'quarantined';
+      detail: string;
+    }[],
   ) {
     const { rows } = await getPool().query<{ id: string }>(
       `INSERT INTO run (requirement_id, environment_id, kind, state) VALUES ($1,$2,'falsification','complete') RETURNING id`,
@@ -753,9 +750,8 @@ describe('GET /test-cases/:id/verify-result (Step 6 gap fix: verify no longer re
 describe('GET /test-cases/:id (Step 6 gap fix: status.testCases[] never carries spec)', () => {
   it('returns the full row, spec included, for a drafted test case', async () => {
     const { requirement } = await seedRequirement('GTC-1');
-    const criterion = (
-      await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] })
-    ).body.criteria[0];
+    const criterion = (await post(`/requirements/${requirement.id}/criteria`, { criteria: [{ body: 'some rule' }] }))
+      .body.criteria[0];
     await post('/gate1/decisions', {
       subject_id: criterion.id,
       decision: 'approved',

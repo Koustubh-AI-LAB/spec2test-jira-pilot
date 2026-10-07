@@ -174,7 +174,11 @@ export async function runPreflight(_args: ParsedArgs): Promise<never> {
     apiVersion: version.body.apiVersion,
     jira: { accountId: jiraPreflight.body.accountId, base: jiraPreflight.body.base },
     project: { id: project.body.id, key: project.body.key },
-    environment: { id: environment.body.id, class: environment.body.class, capabilities: environment.body.capabilities },
+    environment: {
+      id: environment.body.id,
+      class: environment.body.class,
+      capabilities: environment.body.capabilities,
+    },
     grounding: { contentHash: grounding.body.contentHash, source: grounding.body.source },
     prompts: 'ok',
     targetRepo: spec2testDir,

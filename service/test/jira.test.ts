@@ -44,12 +44,8 @@ async function resetTicket(): Promise<void> {
       [fields.lastVerified]: null,
     },
   });
-  await client
-    .request('DELETE', `/rest/api/3/issue/${ISSUE}/properties/spec2test`)
-    .catch(() => undefined);
-  const comments = await client.get<{ comments: { id: string }[] }>(
-    `/rest/api/3/issue/${ISSUE}/comment`,
-  );
+  await client.request('DELETE', `/rest/api/3/issue/${ISSUE}/properties/spec2test`).catch(() => undefined);
+  const comments = await client.get<{ comments: { id: string }[] }>(`/rest/api/3/issue/${ISSUE}/comment`);
   for (const c of comments.comments) {
     await client.request('DELETE', `/rest/api/3/issue/${ISSUE}/comment/${c.id}`);
   }
@@ -184,9 +180,7 @@ describe('pull reconcile', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
       [requirementId],
     );
     const ticket = await fetchTicket(client, ISSUE, fields);
-    const before = await client.get<{ comments: unknown[] }>(
-      `/rest/api/3/issue/${ISSUE}/comment`,
-    );
+    const before = await client.get<{ comments: unknown[] }>(`/rest/api/3/issue/${ISSUE}/comment`);
 
     const outcome = await postCriteria(client, {
       issueKey: ISSUE,
@@ -217,11 +211,11 @@ describe('pull reconcile', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
     assert.equal(result.gate1?.criteriaRejected.length, 0, result.gate1?.criteriaRejected.join('; '));
     assert.match(result.gate1?.actor ?? '', /^jira:/);
 
-    const { rows } = await getPool().query(
-      `SELECT state FROM criterion WHERE requirement_id = $1`,
-      [requirementId],
+    const { rows } = await getPool().query(`SELECT state FROM criterion WHERE requirement_id = $1`, [requirementId]);
+    assert.ok(
+      rows.every((r) => r.state === 'approved'),
+      'not every criterion was approved',
     );
-    assert.ok(rows.every((r) => r.state === 'approved'), 'not every criterion was approved');
   });
 
   it('records the approval in the audit ledger with its Jira lineage', async () => {
@@ -236,14 +230,10 @@ describe('pull reconcile', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
   });
 
   it('is idempotent: a second reconcile adds no second approval', async () => {
-    const countBefore = await getPool().query(
-      `SELECT count(*)::int AS n FROM approval WHERE gate = 1`,
-    );
+    const countBefore = await getPool().query(`SELECT count(*)::int AS n FROM approval WHERE gate = 1`);
     const result = await reconcile(client, ISSUE);
     assert.equal(result.action, 'up_to_date', result.detail);
-    const countAfter = await getPool().query(
-      `SELECT count(*)::int AS n FROM approval WHERE gate = 1`,
-    );
+    const countAfter = await getPool().query(`SELECT count(*)::int AS n FROM approval WHERE gate = 1`);
     assert.equal(countAfter.rows[0].n, countBefore.rows[0].n);
   });
 
@@ -258,11 +248,11 @@ describe('pull reconcile', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
       assert.equal(result.action, 'drift_detected', result.detail);
       assert.notEqual(result.drift?.approvedHash, result.drift?.currentHash);
 
-      const { rows } = await getPool().query(
-        `SELECT state FROM criterion WHERE requirement_id = $1`,
-        [requirementId],
+      const { rows } = await getPool().query(`SELECT state FROM criterion WHERE requirement_id = $1`, [requirementId]);
+      assert.ok(
+        rows.every((r) => r.state === 'stale'),
+        'criteria were not marked stale',
       );
-      assert.ok(rows.every((r) => r.state === 'stale'), 'criteria were not marked stale');
     } finally {
       await client.request('PUT', `/rest/api/3/issue/${ISSUE}`, {
         fields: { summary: original },
@@ -291,7 +281,10 @@ describe('pull reconcile', { skip: !live && 'JIRA_API_TOKEN not set' }, () => {
       'SELECT state FROM criterion WHERE requirement_id = $1',
       [requirementId],
     );
-    assert.ok(criteria.every((c) => c.state === 'approved'), 'not every criterion returned to approved');
+    assert.ok(
+      criteria.every((c) => c.state === 'approved'),
+      'not every criterion returned to approved',
+    );
 
     const after = await getPool().query<{ state: string }>('SELECT state FROM requirement WHERE id = $1', [
       requirementId,

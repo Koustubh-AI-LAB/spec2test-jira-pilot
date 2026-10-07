@@ -105,11 +105,14 @@ describe('validateSpec', () => {
 
   it('rejects a spec for a route the schema does not document - the actual grounding guarantee', () => {
     const ungrounded: TestCaseSpec = { ...grounded, path: '/api/definitely-not-a-real-endpoint' };
-    assert.throws(() => validateSpec(ungrounded, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_not_grounded');
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(ungrounded, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_not_grounded');
+        return true;
+      },
+    );
   });
 
   it('rejects a spec whose body is missing a field the endpoint requires - grounding covers shape, not just the route', () => {
@@ -117,12 +120,15 @@ describe('validateSpec', () => {
       ...grounded,
       body: { user: { email: 'x@example.com', password: 'x' } }, // username missing
     };
-    assert.throws(() => validateSpec(incomplete, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_body_missing_required_fields');
-      assert.match(err.message, /user\.username/);
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(incomplete, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_body_missing_required_fields');
+        assert.match(err.message, /user\.username/);
+        return true;
+      },
+    );
   });
 
   it('grounds every setup step, not just the subject', () => {
@@ -137,12 +143,15 @@ describe('validateSpec', () => {
         },
       ],
     };
-    assert.throws(() => validateSpec(badSetup, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_not_grounded');
-      assert.match(err.message, /setup step 1 \("invent a route"\)/);
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(badSetup, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_not_grounded');
+        assert.match(err.message, /setup step 1 \("invent a route"\)/);
+        return true;
+      },
+    );
   });
 
   it('rejects a reference to a capture no setup step produces', () => {
@@ -161,12 +170,15 @@ describe('validateSpec', () => {
       auth: 'user',
       authToken: '{{capture.tokne}}',
     };
-    assert.throws(() => validateSpec(typo, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_unknown_capture');
-      assert.match(err.message, /available at this point: token/);
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(typo, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_unknown_capture');
+        assert.match(err.message, /available at this point: token/);
+        return true;
+      },
+    );
   });
 
   it('rejects a {{...}} placeholder inside an assertion check - it is never substituted there', () => {
@@ -174,21 +186,27 @@ describe('validateSpec', () => {
       ...grounded,
       assertions: [{ name: 'slug_matches', check: "body.article.slug === '{{capture.slug}}'" }],
     };
-    assert.throws(() => validateSpec(templated, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_template_in_check');
-      assert.match(err.message, /never in a check/);
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(templated, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_template_in_check');
+        assert.match(err.message, /never in a check/);
+        return true;
+      },
+    );
   });
 
   it('rejects {{unique}} in a path - it can never match the recorded replay transcript', () => {
     const uniquePath: TestCaseSpec = { ...grounded, path: '/api/users/{{unique}}' };
-    assert.throws(() => validateSpec(uniquePath, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_unique_in_path');
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(uniquePath, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_unique_in_path');
+        return true;
+      },
+    );
   });
 
   it('still allows {{unique}} in a body and {{capture.x}} in a path', () => {
@@ -217,12 +235,15 @@ describe('validateSpec', () => {
         },
       ],
     };
-    assert.throws(() => validateSpec(forward, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_unknown_capture');
-      assert.match(err.message, /no captures are declared before it/);
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(forward, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_unknown_capture');
+        assert.match(err.message, /no captures are declared before it/);
+        return true;
+      },
+    );
   });
 
   it('rejects two setup steps capturing the same name, which would silently shadow', () => {
@@ -235,20 +256,26 @@ describe('validateSpec', () => {
       capture: { token: ['user', 'token'] },
     };
     const duplicated: TestCaseSpec = { ...grounded, setup: [step, { ...step, name: 'register again' }] };
-    assert.throws(() => validateSpec(duplicated, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_duplicate_capture');
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(duplicated, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_duplicate_capture');
+        return true;
+      },
+    );
   });
 
   it('rejects an authToken on a request that is not auth: "user" - it would be silently ignored', () => {
     const ignored: TestCaseSpec = { ...grounded, auth: 'none', authToken: 'whatever' };
-    assert.throws(() => validateSpec(ignored, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_auth_token_without_user');
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(ignored, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_auth_token_without_user');
+        return true;
+      },
+    );
   });
 
   it('accepts a well-formed chain, including an interpolated subject path', () => {
@@ -284,20 +311,26 @@ describe('validateSpec', () => {
 
   it('rejects a spec missing criterionId', () => {
     const bad: TestCaseSpec = { ...grounded, criterionId: '' };
-    assert.throws(() => validateSpec(bad, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_missing_criterion_id');
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(bad, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_missing_criterion_id');
+        return true;
+      },
+    );
   });
 
   it('rejects a spec with no assertions', () => {
     const bad: TestCaseSpec = { ...grounded, assertions: [] };
-    assert.throws(() => validateSpec(bad, schema), (err: unknown) => {
-      assert.ok(err instanceof RunnerError);
-      assert.equal(err.event, 'spec_missing_assertions');
-      return true;
-    });
+    assert.throws(
+      () => validateSpec(bad, schema),
+      (err: unknown) => {
+        assert.ok(err instanceof RunnerError);
+        assert.equal(err.event, 'spec_missing_assertions');
+        return true;
+      },
+    );
   });
 });
 

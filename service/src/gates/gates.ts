@@ -46,10 +46,9 @@ export async function decide(gate: Gate, input: DecisionInput): Promise<Decision
   try {
     await client.query('BEGIN');
 
-    const { rows } = await client.query(
-      `SELECT id, content_hash, state FROM ${table} WHERE id = $1 FOR UPDATE`,
-      [input.subjectId],
-    );
+    const { rows } = await client.query(`SELECT id, content_hash, state FROM ${table} WHERE id = $1 FOR UPDATE`, [
+      input.subjectId,
+    ]);
     const subject = rows[0];
     if (!subject) throw new NotFoundError(`${type} ${input.subjectId} not found`);
 
@@ -87,10 +86,10 @@ export async function decide(gate: Gate, input: DecisionInput): Promise<Decision
       await client.query('COMMIT');
       return { recorded: false, state: subject.state, sameActorBothGates: false };
     }
-    await client.query(
-      `UPDATE ${table} SET state = $1, updated_at = now() WHERE id = $2`,
-      [nextState, input.subjectId],
-    );
+    await client.query(`UPDATE ${table} SET state = $1, updated_at = now() WHERE id = $2`, [
+      nextState,
+      input.subjectId,
+    ]);
     await client.query(
       `INSERT INTO approval (subject_type, subject_id, subject_hash, gate, decision, actor, channel, reason)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,

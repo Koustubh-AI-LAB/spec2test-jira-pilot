@@ -21,7 +21,12 @@ export function checkAst(source: string, fileName: string, spec: TestCaseSpec): 
   for (const statement of sourceFile.statements) {
     if (!ts.isVariableStatement(statement)) continue;
     for (const decl of statement.declarationList.declarations) {
-      if (ts.isIdentifier(decl.name) && decl.name.text === 'criterionId' && decl.initializer && ts.isStringLiteral(decl.initializer)) {
+      if (
+        ts.isIdentifier(decl.name) &&
+        decl.name.text === 'criterionId' &&
+        decl.initializer &&
+        ts.isStringLiteral(decl.initializer)
+      ) {
         declaredCriterionId = decl.initializer.text;
       }
     }
@@ -132,7 +137,9 @@ function hasSubjectTrue(opts: ts.ObjectLiteralExpression): boolean {
  *  if `node` isn't that shape. */
 function matchTestStepCall(node: ts.Node): { title: string; callback: ts.Node } | undefined {
   const expr = ts.isExpressionStatement(node)
-    ? (ts.isAwaitExpression(node.expression) ? node.expression.expression : node.expression)
+    ? ts.isAwaitExpression(node.expression)
+      ? node.expression.expression
+      : node.expression
     : undefined;
   if (!expr || !ts.isCallExpression(expr)) return undefined;
 

@@ -23,9 +23,7 @@ export async function runVerifyResult(args: ParsedArgs): Promise<never> {
   const res = await http.get<VerifyResultResponse>(`/test-cases/${encodeURIComponent(testCaseId)}/verify-result`);
   if (!res.ok) emitApiFailure(command, res);
 
-  const summary = !res.body.hasRun
-    ? 'never verified yet'
-    : `${res.body.certify!.verdict}: ${res.body.certify!.reason}`;
+  const summary = !res.body.hasRun ? 'never verified yet' : `${res.body.certify!.verdict}: ${res.body.certify!.reason}`;
 
   emit({ ok: true, command, summary, ...res.body });
 }

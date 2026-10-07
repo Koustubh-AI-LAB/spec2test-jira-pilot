@@ -52,26 +52,40 @@ describe('runFalsification (live)', { skip: !live && 'CONDUIT_BASE_URL not set' 
     const report = runFalsification({ spec, filePath, targetRepoRoot, schema });
 
     const statusKill = report.verdicts.find((v) => v.fault.targetAssertion === 'status_201');
-    assert.equal(statusKill?.verdict, 'KILL', `expected status_201's kill fault to score KILL, got ${statusKill?.verdict}: ${statusKill?.detail}`);
+    assert.equal(
+      statusKill?.verdict,
+      'KILL',
+      `expected status_201's kill fault to score KILL, got ${statusKill?.verdict}: ${statusKill?.detail}`,
+    );
 
     const immunityFaults = report.verdicts.filter((v) => v.fault.kind === 'immunity');
     assert.ok(immunityFaults.length > 0, 'expected at least one immunity fault to have been derived');
     for (const v of immunityFaults) {
-      assert.equal(v.verdict, 'SURVIVE', `expected immunity fault "${v.fault.id}" to hold (SURVIVE), got ${v.verdict}: ${v.detail}`);
+      assert.equal(
+        v.verdict,
+        'SURVIVE',
+        `expected immunity fault "${v.fault.id}" to hold (SURVIVE), got ${v.verdict}: ${v.detail}`,
+      );
     }
 
-    assert.ok(report.assertionSensitivity > 0, 'a criterion with a real KILL and no immunity violations should have positive sensitivity');
+    assert.ok(
+      report.assertionSensitivity > 0,
+      'a criterion with a real KILL and no immunity violations should have positive sensitivity',
+    );
     assert.ok(report.runsExecuted > 0);
   });
 
-  it('a deliberately brittle full-snapshot assertion fails the Immunity Set - the design doc\'s own headline check', () => {
+  it("a deliberately brittle full-snapshot assertion fails the Immunity Set - the design doc's own headline check", () => {
     const spec = loadSpec('brittle-login-snapshot');
     const { filePath } = generate(spec, join(spec2testDir, 'generated'), { force: true });
 
     const report = runFalsification({ spec, filePath, targetRepoRoot, schema });
 
     const immunityFaults = report.verdicts.filter((v) => v.fault.kind === 'immunity');
-    assert.ok(immunityFaults.length > 0, 'expected at least one immunity fault to have been derived against the sampled response');
+    assert.ok(
+      immunityFaults.length > 0,
+      'expected at least one immunity fault to have been derived against the sampled response',
+    );
     assert.ok(
       immunityFaults.some((v) => v.verdict === 'KILL'),
       `expected at least one immunity fault to catch the brittle assertion (verdict KILL); got: ${JSON.stringify(immunityFaults.map((v) => v.verdict))}`,

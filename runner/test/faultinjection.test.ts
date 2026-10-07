@@ -7,7 +7,12 @@ import { loadOpenApiSchema, type OpenApiDoc } from '../src/spec/openapi.ts';
 import { deriveKillFaults } from '../src/faultinjection/deriveKillFaults.ts';
 import { deriveImmunityFaults } from '../src/faultinjection/deriveImmunityFaults.ts';
 import { applyMutation } from '../src/client/apiClient.ts';
-import { aggregate, computeAssertionSensitivity, quarantinedReport, type FaultAttempt } from '../src/faultinjection/runFalsification.ts';
+import {
+  aggregate,
+  computeAssertionSensitivity,
+  quarantinedReport,
+  type FaultAttempt,
+} from '../src/faultinjection/runFalsification.ts';
 import type { FaultSpec, FaultVerdict, ResponseMutation } from '../src/faultinjection/types.ts';
 import type { TestCaseSpec } from '../src/spec/types.ts';
 
@@ -17,7 +22,13 @@ function pathOf(mutation: ResponseMutation): string[] {
   return mutation.op === 'set_status' ? [] : mutation.path;
 }
 
-const SCHEMA_PATH = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'fixtures', 'openapi', 'conduit.snapshot.yml');
+const SCHEMA_PATH = join(
+  fileURLToPath(new URL('.', import.meta.url)),
+  '..',
+  'fixtures',
+  'openapi',
+  'conduit.snapshot.yml',
+);
 const schema: OpenApiDoc = loadOpenApiSchema(SCHEMA_PATH);
 
 const registerSpec: TestCaseSpec = {
@@ -270,7 +281,13 @@ describe('computeAssertionSensitivity', () => {
     detail: '',
   });
   const immunity = (verdict: FaultVerdict['verdict']): FaultVerdict => ({
-    fault: { id: 'i', kind: 'immunity', description: 'x', mutation: { op: 'delete_field', path: ['x'] }, plausible: true },
+    fault: {
+      id: 'i',
+      kind: 'immunity',
+      description: 'x',
+      mutation: { op: 'delete_field', path: ['x'] },
+      plausible: true,
+    },
     verdict,
     detail: '',
   });

@@ -68,11 +68,14 @@ describe('prompt_hash_mismatch - sabotage and restore', () => {
 
   it('fails loud when the file on disk no longer matches prompts.lock.json', () => {
     writeFileSync(path, `${original}\n<!-- sabotage: not what the committed lock hashes -->\n`, 'utf8');
-    assert.throws(() => loadPrompt('criteria.v1.md'), (err: unknown) => {
-      assert.ok(err instanceof PromptHashMismatchError);
-      assert.equal(err.event, 'prompt_hash_mismatch');
-      assert.notEqual(err.locked, err.actual);
-      return true;
-    });
+    assert.throws(
+      () => loadPrompt('criteria.v1.md'),
+      (err: unknown) => {
+        assert.ok(err instanceof PromptHashMismatchError);
+        assert.equal(err.event, 'prompt_hash_mismatch');
+        assert.notEqual(err.locked, err.actual);
+        return true;
+      },
+    );
   });
 });

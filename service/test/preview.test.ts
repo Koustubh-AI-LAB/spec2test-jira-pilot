@@ -135,7 +135,10 @@ describe('postCriteria dry run', () => {
 
     const reworded: PostCriteriaInput = {
       ...criteriaInput,
-      criteria: [{ ...criteriaInput.criteria[0]!, body: 'a 5th loan is refused', contentHash: 'h1-new' }, criteriaInput.criteria[1]!],
+      criteria: [
+        { ...criteriaInput.criteria[0]!, body: 'a 5th loan is refused', contentHash: 'h1-new' },
+        criteriaInput.criteria[1]!,
+      ],
     };
     const preview = await postCriteria(jira.client, reworded, { dryRun: true });
     assert.ok(preview.preview, 'a reworded criterion was reported as unchanged');

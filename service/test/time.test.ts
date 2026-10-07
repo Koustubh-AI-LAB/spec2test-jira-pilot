@@ -32,11 +32,7 @@ describe('timestamp comparison across offsets', () => {
     const sorted = entries.slice().sort(byInstant);
     assert.deepEqual(
       sorted.map((e) => e.at),
-      [
-        '2026-09-10T09:00:00.000Z',
-        '2026-09-10T16:00:00.000+0530',
-        '2026-09-10T18:00:00.000+0530',
-      ],
+      ['2026-09-10T09:00:00.000Z', '2026-09-10T16:00:00.000+0530', '2026-09-10T18:00:00.000+0530'],
     );
   });
 

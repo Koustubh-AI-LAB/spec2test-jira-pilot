@@ -304,10 +304,9 @@ export async function pipelineState(client: JiraClient, issueKey: string, projec
 
   const jobActive = requirement
     ? (
-        await pool.query(
-          `SELECT 1 FROM job WHERE requirement_id = $1 AND state IN ('queued', 'running') LIMIT 1`,
-          [requirement.id],
-        )
+        await pool.query(`SELECT 1 FROM job WHERE requirement_id = $1 AND state IN ('queued', 'running') LIMIT 1`, [
+          requirement.id,
+        ])
       ).rows.length > 0
     : false;
 
@@ -316,9 +315,7 @@ export async function pipelineState(client: JiraClient, issueKey: string, projec
   // comment on PipelineState below.
   const verifiedIds = requirement ? await verifiedTestCaseIds(requirement.id) : new Set<string>();
 
-  const criteriaPosted = requirement
-    ? criteriaArePosted(result.ticket?.property, requirement, criteria)
-    : false;
+  const criteriaPosted = requirement ? criteriaArePosted(result.ticket?.property, requirement, criteria) : false;
 
   const { stage, detail } = computeStage({
     requirement,

@@ -168,10 +168,10 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   // The allowlist check itself. An unregistered URL is refused, not warned about.
   app.get('/environments/resolve', async (req) => {
     const { project_id, base_url } = req.query as { project_id: string; base_url: string };
-    const { rows } = await pool.query(
-      'SELECT * FROM environment WHERE project_id = $1 AND base_url = $2',
-      [project_id, base_url],
-    );
+    const { rows } = await pool.query('SELECT * FROM environment WHERE project_id = $1 AND base_url = $2', [
+      project_id,
+      base_url,
+    ]);
     const env = rows[0];
     if (!env) {
       throw new EnvironmentNotAllowedError(
@@ -194,10 +194,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const { id } = req.params as { id: string };
     if (!isUuid(id)) throw new ServiceError('not_found', `environment ${id} not found`, 404);
 
-    const { rows } = await pool.query<{ openapi_url: string }>(
-      'SELECT openapi_url FROM environment WHERE id = $1',
-      [id],
-    );
+    const { rows } = await pool.query<{ openapi_url: string }>('SELECT openapi_url FROM environment WHERE id = $1', [
+      id,
+    ]);
     const env = rows[0];
     if (!env) throw new ServiceError('not_found', `environment ${id} not found`, 404);
     if (!env.openapi_url) {
@@ -263,16 +262,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
         throw new ServiceError(
           'draft_attempts_exhausted',
           `criterion ${criterionId} has failed /specs/validate ${attempts} times in a row - ` +
-            'stop drafting and ask a human to look at the requirement or the target\'s OpenAPI document',
+            "stop drafting and ask a human to look at the requirement or the target's OpenAPI document",
           409,
         );
       }
     }
 
-    const { rows } = await pool.query<{ openapi_url: string }>(
-      'SELECT openapi_url FROM environment WHERE id = $1',
-      [b.environment_id],
-    );
+    const { rows } = await pool.query<{ openapi_url: string }>('SELECT openapi_url FROM environment WHERE id = $1', [
+      b.environment_id,
+    ]);
     const env = rows[0];
     if (!env) throw new ServiceError('not_found', `environment ${b.environment_id} not found`, 404);
     if (!env.openapi_url) {
@@ -339,8 +337,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
        VALUES ($1, $2, $3, $4, $5, 'awaiting_requirement_approval', $6, $7, $8, $9)
        RETURNING *`,
       [
-        b.project_id, b.jira_issue_key, b.title, b.body, contentHash(b.body),
-        p.drafted_by_model, p.prompt_version, p.grounding_hash, p.temperature ?? null,
+        b.project_id,
+        b.jira_issue_key,
+        b.title,
+        b.body,
+        contentHash(b.body),
+        p.drafted_by_model,
+        p.prompt_version,
+        p.grounding_hash,
+        p.temperature ?? null,
       ],
     );
     await audit({
@@ -396,10 +401,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const existing = (await pool.query('SELECT * FROM requirement WHERE id = $1', [id])).rows[0];
     if (!existing) throw new ServiceError('not_found', `requirement ${id} not found`, 404);
     if (existing.state === 'closed') {
-      throw new ServiceError(
-        'requirement_closed',
-        `requirement ${id} is closed and cannot be redrafted`,
-      );
+      throw new ServiceError('requirement_closed', `requirement ${id} is closed and cannot be redrafted`);
     }
 
     const newHash = contentHash(b.body);
@@ -416,8 +418,13 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
           WHERE id = $8
           RETURNING *`,
         [
-          b.title ?? existing.title, b.body, newHash,
-          p.drafted_by_model, p.prompt_version, p.grounding_hash, p.temperature ?? null,
+          b.title ?? existing.title,
+          b.body,
+          newHash,
+          p.drafted_by_model,
+          p.prompt_version,
+          p.grounding_hash,
+          p.temperature ?? null,
           id,
         ],
       );
@@ -444,10 +451,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       // A redraft with fewer criteria than the last one leaves the extra
       // ordinals behind otherwise - drop them explicitly rather than let a
       // stale criterion linger with no corresponding entry in the new draft.
-      await client.query('DELETE FROM criterion WHERE requirement_id = $1 AND ordinal > $2', [
-        id,
-        b.criteria.length,
-      ]);
+      await client.query('DELETE FROM criterion WHERE requirement_id = $1 AND ordinal > $2', [id, b.criteria.length]);
 
       await audit(
         {
@@ -478,9 +482,8 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const { id } = req.params as { id: string };
     const requirement = (await pool.query('SELECT * FROM requirement WHERE id = $1', [id])).rows[0];
     if (!requirement) throw new ServiceError('not_found', `requirement ${id} not found`, 404);
-    const criteria = (
-      await pool.query('SELECT * FROM criterion WHERE requirement_id = $1 ORDER BY ordinal', [id])
-    ).rows;
+    const criteria = (await pool.query('SELECT * FROM criterion WHERE requirement_id = $1 ORDER BY ordinal', [id]))
+      .rows;
     const cases = (
       await pool.query(
         `SELECT tc.* FROM test_case tc
@@ -504,10 +507,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     // Defense in depth: a test case must never be drafted against a
     // criterion gate 1 hasn't actually closed on - found while wiring step
     // 5, this route previously accepted one against any criterion state.
-    const { rows: criterionRows } = await pool.query<{ state: string }>(
-      'SELECT state FROM criterion WHERE id = $1',
-      [b.criterion_id],
-    );
+    const { rows: criterionRows } = await pool.query<{ state: string }>('SELECT state FROM criterion WHERE id = $1', [
+      b.criterion_id,
+    ]);
     if (!criterionRows[0]) throw new ServiceError('not_found', `criterion ${b.criterion_id} not found`, 404);
     // `uncovered` is Gate 1 having approved the criterion and Gate 2 having
     // then rejected every test case for it (see the gate 2 route below). It is
@@ -533,8 +535,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
-          b.criterion_id, b.name, b.kind, serialised, contentHash(serialised),
-          p.drafted_by_model, p.prompt_version, p.grounding_hash, p.temperature ?? null,
+          b.criterion_id,
+          b.name,
+          b.kind,
+          serialised,
+          contentHash(serialised),
+          p.drafted_by_model,
+          p.prompt_version,
+          p.grounding_hash,
+          p.temperature ?? null,
         ],
       );
       // `uncovered` was defined as "no non-rejected test case", and there is
@@ -657,7 +666,10 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const { id } = req.params as { id: string };
     const b = req.body as { environment_id: string };
     if (!b.environment_id) {
-      throw new ServiceError('environment_id_required', 'environment_id is required - resolve it via GET /environments/resolve first');
+      throw new ServiceError(
+        'environment_id_required',
+        'environment_id is required - resolve it via GET /environments/resolve first',
+      );
     }
 
     // A hand-edited generated file must never be silently re-verified and
@@ -796,8 +808,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       await postRefusal(client, issueKey, result);
     }
     const { ticket, ...rest } = result;
-    return { ...rest, ticket: ticket && { summary: ticket.summary, status: ticket.status,
-      verificationStatus: ticket.verificationStatus, labels: ticket.labels } };
+    return {
+      ...rest,
+      ticket: ticket && {
+        summary: ticket.summary,
+        status: ticket.status,
+        verificationStatus: ticket.verificationStatus,
+        labels: ticket.labels,
+      },
+    };
   });
 
   /**
@@ -889,10 +908,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   app.get('/audit', async (req) => {
     const { limit } = req.query as { limit?: string };
-    const { rows } = await pool.query(
-      'SELECT * FROM audit_event ORDER BY created_at DESC, id DESC LIMIT $1',
-      [Math.min(Number(limit ?? 100), 1000)],
-    );
+    const { rows } = await pool.query('SELECT * FROM audit_event ORDER BY created_at DESC, id DESC LIMIT $1', [
+      Math.min(Number(limit ?? 100), 1000),
+    ]);
     return { events: rows };
   });
 

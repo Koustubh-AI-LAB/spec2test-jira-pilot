@@ -33,8 +33,7 @@ export function resolveEnvironment(
 }
 
 export type ResolvedContext =
-  | { ok: true; project: ProjectRow; environment: EnvironmentRow }
-  | { ok: false; failure: ApiFailure };
+  { ok: true; project: ProjectRow; environment: EnvironmentRow } | { ok: false; failure: ApiFailure };
 
 /** For commands that need both - draft-test-case, grounding, verify. Commands
  *  that only touch Jira (status, reconcile, post-criteria, sync,

@@ -117,7 +117,10 @@ function locate(body: unknown, path: string[]): { parent: Record<string, unknown
  * resulting pass must never be read as "the assertion survived a real
  * fault." `response` is never mutated in place; a fresh copy is returned.
  */
-export function applyMutation(response: ApiResponse, mutation: ResponseMutation): { response: ApiResponse; applied: boolean } {
+export function applyMutation(
+  response: ApiResponse,
+  mutation: ResponseMutation,
+): { response: ApiResponse; applied: boolean } {
   if (mutation.op === 'set_status') {
     const applied = response.status !== mutation.value;
     return { response: { status: mutation.value, body: response.body }, applied };
@@ -226,9 +229,7 @@ function resolveTransport(): Transport {
     : process.env.SPEC2TEST_TRANSCRIPT
       ? transcriptTransport(process.env.SPEC2TEST_TRANSCRIPT)
       : liveTransport;
-  const captured = process.env.SPEC2TEST_CAPTURE
-    ? withCapture(base, process.env.SPEC2TEST_CAPTURE)
-    : base;
+  const captured = process.env.SPEC2TEST_CAPTURE ? withCapture(base, process.env.SPEC2TEST_CAPTURE) : base;
   return process.env.SPEC2TEST_TRANSCRIPT_CAPTURE
     ? withTranscriptCapture(captured, process.env.SPEC2TEST_TRANSCRIPT_CAPTURE)
     : captured;

@@ -86,7 +86,7 @@ describe('withRequirementLock', () => {
     assert.equal(ran, true, 'the lock from the failed call was never released');
   });
 
-  it('returns the callback\'s own return value', async () => {
+  it("returns the callback's own return value", async () => {
     const result = await withRequirementLock('req-lock-test-return', async () => 'the-value');
     assert.equal(result, 'the-value');
   });

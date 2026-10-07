@@ -164,7 +164,10 @@ export function adfToText(doc: unknown): string {
     renderBlock(block, lines, 0);
     if (lines.length) groups.push(lines.join('\n'));
   }
-  return groups.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+  return groups
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /**

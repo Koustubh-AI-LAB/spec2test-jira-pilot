@@ -3,9 +3,24 @@ import assert from 'node:assert/strict';
 import { decideVerificationState } from '../src/verification.ts';
 import type { CriterionCoverage } from '../src/verification.ts';
 
-const covered = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: true, quarantinedOnly: false });
-const uncovered = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: false, quarantinedOnly: false });
-const quarantined = (id = 'c1'): CriterionCoverage => ({ id, stateAffecting: false, covered: false, quarantinedOnly: true });
+const covered = (id = 'c1'): CriterionCoverage => ({
+  id,
+  stateAffecting: false,
+  covered: true,
+  quarantinedOnly: false,
+});
+const uncovered = (id = 'c1'): CriterionCoverage => ({
+  id,
+  stateAffecting: false,
+  covered: false,
+  quarantinedOnly: false,
+});
+const quarantined = (id = 'c1'): CriterionCoverage => ({
+  id,
+  stateAffecting: false,
+  covered: false,
+  quarantinedOnly: true,
+});
 
 const base = {
   nonRejectedCriteriaCount: 1,

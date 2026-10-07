@@ -97,7 +97,10 @@ describe('SPEC2TEST_TRANSCRIPT_CAPTURE (withTranscriptCapture)', () => {
       // The spec's own path is "/api/articles/{{capture.slug}}"; recording
       // that instead would produce a key replay never looks up.
       assert.ok(transcript['PUT /api/articles/a-slug']);
-      assert.equal(Object.keys(transcript).some((k) => k.includes('{{capture')), false);
+      assert.equal(
+        Object.keys(transcript).some((k) => k.includes('{{capture')),
+        false,
+      );
     });
   });
 

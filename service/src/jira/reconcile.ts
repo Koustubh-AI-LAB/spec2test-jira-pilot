@@ -87,11 +87,7 @@ type Base = { issueKey: string; requirementHash: string; dryRun: boolean; ticket
  * since ticket.verificationStatus already tells us which value is CURRENT,
  * the caller only ever asks for the entry matching that current value.
  */
-function findStatusChange(
-  changelog: ChangelogEntry[],
-  fieldId: string,
-  value: string,
-): ChangelogEntry | undefined {
+function findStatusChange(changelog: ChangelogEntry[], fieldId: string, value: string): ChangelogEntry | undefined {
   return changelog
     .filter((e) => e.field === fieldId && e.to === value)
     .sort(byInstant)
@@ -384,13 +380,9 @@ async function applyGate1Decision(
   // stuck reporting stage 'stale' forever even though every criterion read
   // 'approved'.
   if (decision === 'rejected' && done > 0) {
-    await db.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [
-      local.id,
-    ]);
+    await db.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [local.id]);
   } else if (decision === 'approved' && done > 0 && local.state === 'stale') {
-    await db.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [
-      local.id,
-    ]);
+    await db.query(`UPDATE requirement SET state = 'draft', updated_at = now() WHERE id = $1`, [local.id]);
   }
 
   await audit({
@@ -511,10 +503,7 @@ async function markStale(
       WHERE requirement_id = $1 AND state IN ('proposed', 'approved')`,
     [requirementId],
   );
-  await db.query(
-    `UPDATE requirement SET state = 'stale', updated_at = now() WHERE id = $1`,
-    [requirementId],
-  );
+  await db.query(`UPDATE requirement SET state = 'stale', updated_at = now() WHERE id = $1`, [requirementId]);
   await audit(
     {
       event: 'requirement_drift_detected',

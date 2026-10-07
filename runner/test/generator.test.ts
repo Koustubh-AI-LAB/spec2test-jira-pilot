@@ -33,7 +33,10 @@ describe('generator determinism', () => {
 
   it('renders {{unique}} as a runtime-computed template literal, not a baked-in value', () => {
     const source = render(registerSpec);
-    assert.match(source, /const uniqueSuffix = `\$\{Date\.now\(\)\}_\$\{Math\.random\(\)\.toString\(36\)\.slice\(2, 8\)\}`;/);
+    assert.match(
+      source,
+      /const uniqueSuffix = `\$\{Date\.now\(\)\}_\$\{Math\.random\(\)\.toString\(36\)\.slice\(2, 8\)\}`;/,
+    );
     assert.match(source, /`spec2test_\$\{uniqueSuffix\}`/);
     assert.doesNotMatch(source, /spec2test_\{\{unique\}\}/);
   });
@@ -119,7 +122,10 @@ describe('generator: chained specs', () => {
   it('extracts each capture with optional access and asserts it was actually produced', () => {
     const source = render(chainedSpec);
     assert.match(source, /captures\["authorToken"\] = body\?\.\["user"\]\?\.\["token"\];/);
-    assert.match(source, /expect\(captures\["authorToken"\], "setup step \\"register the author\\" did not produce capture \\"authorToken\\""\)\.toBeDefined\(\);/);
+    assert.match(
+      source,
+      /expect\(captures\["authorToken"\], "setup step \\"register the author\\" did not produce capture \\"authorToken\\""\)\.toBeDefined\(\);/,
+    );
   });
 
   it('fails a setup step outside any named assertion, so a broken control cannot score as a KILL', () => {

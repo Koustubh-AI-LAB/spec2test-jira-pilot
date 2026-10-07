@@ -49,7 +49,8 @@ export function runFalsification(opts: RunFalsificationOptions): FalsificationRe
     const captureRun = runPlaywright(targetRepoRoot, filePath, { SPEC2TEST_CAPTURE: capturePath });
     runsExecuted++;
 
-    const quarantineReason = 'the initial healthy control failed before any fault could be tried - environment unstable';
+    const quarantineReason =
+      'the initial healthy control failed before any fault could be tried - environment unstable';
     if (!captureRun.passed) {
       return quarantinedReport(spec.criterionId, killFaults, runsExecuted, quarantineReason);
     }
@@ -105,7 +106,11 @@ export function quarantinedReport(
   runsExecuted: number,
   reason: string,
 ): FalsificationReport {
-  const verdicts: FaultVerdict[] = killFaults.map((fault) => ({ fault, verdict: 'QUARANTINED' as Verdict, detail: reason }));
+  const verdicts: FaultVerdict[] = killFaults.map((fault) => ({
+    fault,
+    verdict: 'QUARANTINED' as Verdict,
+    detail: reason,
+  }));
   return { criterionId, verdicts, assertionSensitivity: 0, runsExecuted, criterionQuarantined: reason };
 }
 
@@ -168,7 +173,8 @@ export function aggregate(fault: FaultSpec, attempts: FaultAttempt[]): { verdict
   const targetStep = fault.targetAssertion ? `assertion: ${fault.targetAssertion}` : undefined;
   const allPassed = attempts.every((a) => a.testPassed);
   const allFailed = attempts.every((a) => !a.testPassed);
-  const describeAttempts = () => attempts.map((a) => (a.testPassed ? '(passed)' : a.failedStep ?? '(failed, no step recorded)')).join(', ');
+  const describeAttempts = () =>
+    attempts.map((a) => (a.testPassed ? '(passed)' : (a.failedStep ?? '(failed, no step recorded)'))).join(', ');
 
   if (fault.kind === 'kill') {
     // testPassed is the real exit code, checked first: a crash outside any
@@ -181,9 +187,15 @@ export function aggregate(fault: FaultSpec, attempts: FaultAttempt[]): { verdict
       if (attempts.every((a) => a.applied)) {
         return { verdict: 'SURVIVE', detail: 'the mutation applied but the test still passed' };
       }
-      return { verdict: 'INCONCLUSIVE', detail: 'the mutation never applied (target path/status not present in the real response)' };
+      return {
+        verdict: 'INCONCLUSIVE',
+        detail: 'the mutation never applied (target path/status not present in the real response)',
+      };
     }
-    return { verdict: 'INCONCLUSIVE', detail: `attempts disagreed or failed for the wrong reason: ${describeAttempts()}` };
+    return {
+      verdict: 'INCONCLUSIVE',
+      detail: `attempts disagreed or failed for the wrong reason: ${describeAttempts()}`,
+    };
   }
 
   // immunity: any real failure at all - at a step or not - counts as
@@ -198,7 +210,10 @@ export function aggregate(fault: FaultSpec, attempts: FaultAttempt[]): { verdict
       detail: `immunity violated - the test broke on an unrelated change (${attempts[0]!.failedStep ?? 'failed, no step recorded'})`,
     };
   }
-  return { verdict: 'INCONCLUSIVE', detail: `attempts disagreed on whether the unrelated change broke the test: ${describeAttempts()}` };
+  return {
+    verdict: 'INCONCLUSIVE',
+    detail: `attempts disagreed on whether the unrelated change broke the test: ${describeAttempts()}`,
+  };
 }
 
 /** Exported for direct testing, same reasoning as aggregate(). */

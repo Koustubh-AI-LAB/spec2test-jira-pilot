@@ -36,7 +36,12 @@ function isReferenced(path: string[], spec: TestCaseSpec): boolean {
  * 1 referenced) would produce far more faults than a pilot should be paying
  * for per criterion.
  */
-export function deriveImmunityFaults(spec: TestCaseSpec, sampledStatus: number, sampledBody: unknown, schema: OpenApiDoc): FaultSpec[] {
+export function deriveImmunityFaults(
+  spec: TestCaseSpec,
+  sampledStatus: number,
+  sampledBody: unknown,
+  schema: OpenApiDoc,
+): FaultSpec[] {
   const candidates = leafPaths(sampledBody).filter((path) => !isReferenced(path, spec));
   const documented = documentedStatuses(schema, spec.method, spec.path);
 

@@ -35,10 +35,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): JiraConfig {
   const email = env.JIRA_EMAIL ?? '';
   const token = env.JIRA_API_TOKEN ?? '';
   if (!siteUrl || !email || !token) {
-    throw new ServiceError(
-      'jira_not_configured',
-      'JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN must all be set',
-    );
+    throw new ServiceError('jira_not_configured', 'JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN must all be set');
   }
   return { siteUrl, email, token, cloudId: env.JIRA_CLOUD_ID || undefined };
 }
@@ -51,8 +48,7 @@ export class JiraClient {
 
   constructor(config: JiraConfig) {
     this.config = config;
-    this.authHeader =
-      'Basic ' + Buffer.from(`${config.email}:${config.token}`, 'utf8').toString('base64');
+    this.authHeader = 'Basic ' + Buffer.from(`${config.email}:${config.token}`, 'utf8').toString('base64');
     this.apiBase = config.siteUrl;
   }
 
@@ -146,9 +142,8 @@ export class JiraClient {
       // Honour Retry-After when Jira sends it; it knows its own window better
       // than our backoff curve does.
       const retryAfter = Number(res.headers.get('retry-after'));
-      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1000
-        : BASE_BACKOFF_MS * 2 ** (attempt - 1);
+      const waitMs =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : BASE_BACKOFF_MS * 2 ** (attempt - 1);
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
 
@@ -166,9 +161,7 @@ export class JiraClient {
    * field. Trusting it would build the write path on a meaningless signal.
    */
   async preflight(): Promise<{ accountId: string; displayName: string; base: string }> {
-    const me = await this.get<{ accountId: string; displayName: string }>(
-      '/rest/api/3/myself',
-    );
+    const me = await this.get<{ accountId: string; displayName: string }>('/rest/api/3/myself');
     return { accountId: me.accountId, displayName: me.displayName, base: this.apiBase };
   }
 }

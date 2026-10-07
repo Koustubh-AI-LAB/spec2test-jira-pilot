@@ -61,7 +61,7 @@ export async function validateFieldMap(client: JiraClient, fields: FieldMap): Pr
       'jira_field_not_found',
       'these configured field ids do not exist on this Jira site: ' +
         missing.map(([key, id]) => `${key}=${id}`).join(', ') +
-        ' - check JIRA_FIELD_* in .env against the site\'s actual custom field ids',
+        " - check JIRA_FIELD_* in .env against the site's actual custom field ids",
     );
   }
 }
@@ -168,18 +168,9 @@ export async function fetchTicket(
   issueKey: string,
   fields: FieldMap = loadFieldMap(),
 ): Promise<TicketSnapshot> {
-  const wanted = [
-    'summary',
-    'status',
-    'labels',
-    'description',
-    'updated',
-    fields.verificationStatus,
-  ].join(',');
+  const wanted = ['summary', 'status', 'labels', 'description', 'updated', fields.verificationStatus].join(',');
 
-  const issue = await client.get<RawIssue>(
-    `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=${wanted}`,
-  );
+  const issue = await client.get<RawIssue>(`/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=${wanted}`);
 
   const summary = String(issue.fields.summary ?? '');
   const text = requirementText(summary, issue.fields.description);
@@ -207,10 +198,7 @@ export async function fetchTicket(
  * first page: the entry that matters is the PO's approval, and on a
  * long-running ticket that is not on page one.
  */
-export async function fetchChangelog(
-  client: JiraClient,
-  issueKey: string,
-): Promise<ChangelogEntry[]> {
+export async function fetchChangelog(client: JiraClient, issueKey: string): Promise<ChangelogEntry[]> {
   const out: ChangelogEntry[] = [];
   const pageSize = 100;
 
@@ -291,10 +279,7 @@ export async function fetchComments(client: JiraClient, issueKey: string): Promi
   return out.sort((a, b) => instant(a.created) - instant(b.created));
 }
 
-export async function fetchProperty(
-  client: JiraClient,
-  issueKey: string,
-): Promise<PipelineProperty | undefined> {
+export async function fetchProperty(client: JiraClient, issueKey: string): Promise<PipelineProperty | undefined> {
   try {
     const res = await client.get<{ value: PipelineProperty }>(
       `/rest/api/3/issue/${encodeURIComponent(issueKey)}/properties/${PROPERTY_KEY}`,

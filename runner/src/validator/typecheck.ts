@@ -22,10 +22,7 @@ export function typecheckFile(filePath: string, tsconfigDir: string): TypecheckD
   const program = ts.createProgram({ rootNames: [filePath], options: parsed.options });
   const sourceFile = program.getSourceFile(filePath);
 
-  const diagnostics = [
-    ...program.getSyntacticDiagnostics(sourceFile),
-    ...program.getSemanticDiagnostics(sourceFile),
-  ];
+  const diagnostics = [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)];
 
   return diagnostics.map((d) => {
     const message = ts.flattenDiagnosticMessageText(d.messageText, '\n');

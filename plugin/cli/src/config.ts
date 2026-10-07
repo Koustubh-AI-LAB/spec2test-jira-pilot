@@ -30,8 +30,7 @@ export class ConfigError extends Error {
   // prompts.ts's comment.
   constructor(missing: string[]) {
     super(
-      `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set - ` +
-        'see .env.example at the repo root',
+      `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set - ` + 'see .env.example at the repo root',
     );
     this.event = 'config_missing';
     this.missing = missing;
