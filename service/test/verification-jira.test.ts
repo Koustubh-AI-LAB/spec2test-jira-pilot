@@ -63,7 +63,11 @@ describe('postVerification', () => {
     const jiraWeak = fakeJira({ key: 'VERIFY-WEAK', summary: 't', description: 'b', changelog: [] });
     const weakOutcome = await postVerification(
       jiraWeak.client,
-      baseInput({ issueKey: 'VERIFY-WEAK', state: 'weak', criteria: [{ id: 'c1', body: 'x', stateAffecting: false, covered: false }] }),
+      baseInput({
+        issueKey: 'VERIFY-WEAK',
+        state: 'weak',
+        criteria: [{ id: 'c1', body: 'x', stateAffecting: false, covered: false }],
+      }),
       { fields: FIELDS },
     );
     assert.equal(weakOutcome.wrote, true);
@@ -73,7 +77,11 @@ describe('postVerification', () => {
     const jiraFailing = fakeJira({ key: 'VERIFY-FAIL', summary: 't', description: 'b', changelog: [] });
     await postVerification(
       jiraFailing.client,
-      baseInput({ issueKey: 'VERIFY-FAIL', state: 'failing', criteria: [{ id: 'c1', body: 'x', stateAffecting: false, covered: false }] }),
+      baseInput({
+        issueKey: 'VERIFY-FAIL',
+        state: 'failing',
+        criteria: [{ id: 'c1', body: 'x', stateAffecting: false, covered: false }],
+      }),
       { fields: FIELDS },
     );
     const failingBody = jiraFailing.writes[0]!.body as { fields: Record<string, unknown> };

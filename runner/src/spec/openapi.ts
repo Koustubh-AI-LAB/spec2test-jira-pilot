@@ -113,7 +113,11 @@ function resolve(doc: RawDoc, node: unknown): Record<string, unknown> | undefine
   return obj;
 }
 
-function requestBodyJsonSchema(schema: OpenApiDoc, method: HttpMethod, requestPath: string): Record<string, unknown> | undefined {
+function requestBodyJsonSchema(
+  schema: OpenApiDoc,
+  method: HttpMethod,
+  requestPath: string,
+): Record<string, unknown> | undefined {
   const template = matchingTemplate(schema, method, requestPath);
   if (!template) return undefined;
 
@@ -172,7 +176,11 @@ export function missingRequiredBodyFields(
   return missingRequiredFields(schema.raw, jsonSchema, body, '');
 }
 
-function operationFor(schema: OpenApiDoc, method: HttpMethod, requestPath: string): Record<string, unknown> | undefined {
+function operationFor(
+  schema: OpenApiDoc,
+  method: HttpMethod,
+  requestPath: string,
+): Record<string, unknown> | undefined {
   const template = matchingTemplate(schema, method, requestPath);
   if (!template) return undefined;
   const pathItem = (schema.raw.paths as Record<string, Record<string, unknown>> | undefined)?.[template];

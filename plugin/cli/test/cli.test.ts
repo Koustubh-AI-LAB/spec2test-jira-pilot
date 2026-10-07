@@ -52,9 +52,7 @@ describe('s2t status', () => {
       stage: 'awaiting_test_approval',
       detail: 'd',
       requirement: { id: 'req-1', state: 'awaiting_test_approval', title: 't', sourceTextHash: 'h' },
-      criteria: [
-        { id: 'c1', ordinal: 1, body: 'rule', state: 'approved', stateAffecting: false, contentHash: 'ch1' },
-      ],
+      criteria: [{ id: 'c1', ordinal: 1, body: 'rule', state: 'approved', stateAffecting: false, contentHash: 'ch1' }],
       testCases: [
         { id: 'tc1', criterionId: 'c1', name: 'case', state: 'proposed', contentHash: 'tch1', verified: false },
       ],
@@ -67,7 +65,12 @@ describe('s2t status', () => {
     const before_ = stub.requests.length;
     const res = await runCli(['status', '--issue', 'S2T-1'], env());
     assert.equal(res.status, 0);
-    const body = res.stdout as { ok: boolean; stage: string; pendingTestCases: unknown[]; uncoveredCriteria: unknown[] };
+    const body = res.stdout as {
+      ok: boolean;
+      stage: string;
+      pendingTestCases: unknown[];
+      uncoveredCriteria: unknown[];
+    };
     assert.equal(body.ok, true);
     assert.equal(body.stage, 'awaiting_test_approval');
     assert.equal(body.pendingTestCases.length, 1, 'the proposed test case should be pending');
@@ -119,7 +122,10 @@ describe('parseArgs edge cases', () => {
   });
 
   it('--flag=value is the escape hatch for a value that itself starts with "--"', async () => {
-    stub.respond('POST', '/gate2/decisions', { status: 200, body: { recorded: true, state: 'rejected', sameActorBothGates: false } });
+    stub.respond('POST', '/gate2/decisions', {
+      status: 200,
+      body: { recorded: true, state: 'rejected', sameActorBothGates: false },
+    });
     const n = stub.requests.length;
     await runCli(
       ['approve-test-case', '--test-case-id', 'tc1', '--seen-hash', 'h1', '--reject', '--reason=--looks-like-a-flag'],
@@ -149,7 +155,12 @@ describe('s2t draft-requirement', () => {
         criteria: [],
         testCases: [],
         reconcile: { action: 'no_local_instance', detail: 'd' },
-        jira: { verificationStatus: undefined, criteriaPosted: false, summary: 'a loan rule', requirementText: 'a loan rule\n\nfull text' },
+        jira: {
+          verificationStatus: undefined,
+          criteriaPosted: false,
+          summary: 'a loan rule',
+          requirementText: 'a loan rule\n\nfull text',
+        },
       },
     });
     stub.respond('POST', '/requirements', { status: 200, body: { resumed: false, requirement: { id: 'req-1' } } });
@@ -219,7 +230,14 @@ describe('s2t draft-criteria', () => {
   it('posts criteria from --json-file, sends no provenance fields (the route accepts none)', async () => {
     stub.respond('GET', '/requirements/req-1', {
       status: 200,
-      body: { requirement: { id: 'req-1', jira_issue_key: 'S2T-1', body: 't\n\nfull text', state: 'awaiting_requirement_approval' } },
+      body: {
+        requirement: {
+          id: 'req-1',
+          jira_issue_key: 'S2T-1',
+          body: 't\n\nfull text',
+          state: 'awaiting_requirement_approval',
+        },
+      },
     });
     stub.respond('POST', '/requirements/req-1/criteria', {
       status: 200,
@@ -244,7 +262,14 @@ describe('s2t draft-criteria', () => {
   it('--json-file - fails loud with stdin_timeout instead of hanging when nothing is piped', async () => {
     stub.respond('GET', '/requirements/req-1', {
       status: 200,
-      body: { requirement: { id: 'req-1', jira_issue_key: 'S2T-1', body: 't\n\nfull text', state: 'awaiting_requirement_approval' } },
+      body: {
+        requirement: {
+          id: 'req-1',
+          jira_issue_key: 'S2T-1',
+          body: 't\n\nfull text',
+          state: 'awaiting_requirement_approval',
+        },
+      },
     });
 
     const res = await runCli(
@@ -262,7 +287,9 @@ describe('s2t redraft', () => {
   it('looks up the ticket via the requirement own jira_issue_key, no --issue flag needed', async () => {
     stub.respond('GET', '/requirements/req-1', {
       status: 200,
-      body: { requirement: { id: 'req-1', project_id: 'proj-1', jira_issue_key: 'S2T-1', body: 'old', state: 'stale' } },
+      body: {
+        requirement: { id: 'req-1', project_id: 'proj-1', jira_issue_key: 'S2T-1', body: 'old', state: 'stale' },
+      },
     });
     stub.respond('GET', '/pipeline/S2T-1', {
       status: 200,
@@ -274,7 +301,12 @@ describe('s2t redraft', () => {
         criteria: [],
         testCases: [],
         reconcile: { action: 'drift_detected', detail: 'd' },
-        jira: { verificationStatus: undefined, criteriaPosted: false, summary: 't2', requirementText: 't2\n\nnew text' },
+        jira: {
+          verificationStatus: undefined,
+          criteriaPosted: false,
+          summary: 't2',
+          requirementText: 't2\n\nnew text',
+        },
       },
     });
     stub.respond('POST', '/requirements/req-1/redraft', {
@@ -296,7 +328,11 @@ describe('s2t redraft', () => {
     assert.equal(sent.reason, 'drifted');
 
     const pipelineReq = since(n).find((r) => r.path === '/pipeline/S2T-1');
-    assert.equal(pipelineReq?.query.get('project_id'), 'proj-1', 'must scope the pipeline lookup by the requirement own project');
+    assert.equal(
+      pipelineReq?.query.get('project_id'),
+      'proj-1',
+      'must scope the pipeline lookup by the requirement own project',
+    );
   });
 });
 
@@ -306,7 +342,12 @@ describe('s2t grounding', () => {
     stub.respond('GET', '/environments/resolve', { status: 200, body: ENVIRONMENT });
     stub.respond('GET', '/environments/env-1/grounding', {
       status: 200,
-      body: { environmentId: 'env-1', source: 'x.yml', text: 'openapi: 3.0.0\npaths:\n  /api/articles:\n    get: {}\n', contentHash: 'h' },
+      body: {
+        environmentId: 'env-1',
+        source: 'x.yml',
+        text: 'openapi: 3.0.0\npaths:\n  /api/articles:\n    get: {}\n',
+        contentHash: 'h',
+      },
     });
 
     const res = await runCli(['grounding'], env());
@@ -334,7 +375,13 @@ describe('s2t post-criteria', () => {
   it('--preview sends dry_run: true', async () => {
     stub.respond('POST', '/jira/S2T-1/criteria', {
       status: 200,
-      body: { wrote: false, reason: 'preview: would post 1 criteria', fingerprint: 'fp', dryRun: true, preview: { comment: {}, fields: {} } },
+      body: {
+        wrote: false,
+        reason: 'preview: would post 1 criteria',
+        fingerprint: 'fp',
+        dryRun: true,
+        preview: { comment: {}, fields: {} },
+      },
     });
     const n = stub.requests.length;
     const res = await runCli(['post-criteria', '--issue', 'S2T-1', '--requirement-id', 'req-1', '--preview'], env());
@@ -427,7 +474,15 @@ describe('s2t get-test-case', () => {
   it('fetches the full row, spec included, by id', async () => {
     stub.respond('GET', '/test-cases/tc1', {
       status: 200,
-      body: { id: 'tc1', criterion_id: 'c1', name: 'n', kind: 'api', spec: { method: 'GET', path: '/x' }, content_hash: 'h1', state: 'proposed' },
+      body: {
+        id: 'tc1',
+        criterion_id: 'c1',
+        name: 'n',
+        kind: 'api',
+        spec: { method: 'GET', path: '/x' },
+        content_hash: 'h1',
+        state: 'proposed',
+      },
     });
 
     const res = await runCli(['get-test-case', '--test-case-id', 'tc1'], env());
@@ -459,7 +514,10 @@ describe('s2t get-test-case', () => {
 
 describe('s2t approve-test-case', () => {
   it('approves with exactly one id and the seen hash', async () => {
-    stub.respond('POST', '/gate2/decisions', { status: 200, body: { recorded: true, state: 'approved', sameActorBothGates: false } });
+    stub.respond('POST', '/gate2/decisions', {
+      status: 200,
+      body: { recorded: true, state: 'approved', sameActorBothGates: false },
+    });
     const n = stub.requests.length;
     const res = await runCli(
       ['approve-test-case', '--test-case-id', 'tc1', '--seen-hash', 'h1', '--actor', 'dev@example.com'],
@@ -473,14 +531,20 @@ describe('s2t approve-test-case', () => {
   });
 
   it('falls back to SPEC2TEST_ACTOR when --actor is not given', async () => {
-    stub.respond('POST', '/gate2/decisions', { status: 200, body: { recorded: true, state: 'approved', sameActorBothGates: false } });
+    stub.respond('POST', '/gate2/decisions', {
+      status: 200,
+      body: { recorded: true, state: 'approved', sameActorBothGates: false },
+    });
     const n = stub.requests.length;
     await runCli(['approve-test-case', '--test-case-id', 'tc1', '--seen-hash', 'h1'], env());
     assert.equal((since(n)[0]!.body as { actor: string }).actor, 'dev@example.com');
   });
 
   it('rejects with a reason', async () => {
-    stub.respond('POST', '/gate2/decisions', { status: 200, body: { recorded: true, state: 'rejected', sameActorBothGates: false } });
+    stub.respond('POST', '/gate2/decisions', {
+      status: 200,
+      body: { recorded: true, state: 'rejected', sameActorBothGates: false },
+    });
     const n = stub.requests.length;
     await runCli(
       ['approve-test-case', '--test-case-id', 'tc1', '--seen-hash', 'h1', '--reject', '--reason', 'wrong assertion'],
@@ -583,7 +647,10 @@ describe('s2t sync', () => {
   it('requires exactly one of --preview/--confirm, and sends dry_run accordingly', async () => {
     stub.respond('POST', '/jira/S2T-1/verification', {
       status: 200,
-      body: { verification: { state: 'contract_verified', criteria: [] }, jira: { wrote: true, reason: 'posted', fingerprint: 'fp' } },
+      body: {
+        verification: { state: 'contract_verified', criteria: [] },
+        jira: { wrote: true, reason: 'posted', fingerprint: 'fp' },
+      },
     });
     const n = stub.requests.length;
     const res = await runCli(['sync', '--issue', 'S2T-1', '--requirement-id', 'req-1', '--confirm'], env());
@@ -594,7 +661,10 @@ describe('s2t sync', () => {
   it('--preview still reports postgresWritten: true - the service persists requirement.state regardless of dry_run', async () => {
     stub.respond('POST', '/jira/S2T-1/verification', {
       status: 200,
-      body: { verification: { state: 'weak', criteria: [] }, jira: { dryRun: true, reason: 'preview', fingerprint: 'fp' } },
+      body: {
+        verification: { state: 'weak', criteria: [] },
+        jira: { dryRun: true, reason: 'preview', fingerprint: 'fp' },
+      },
     });
     const res = await runCli(['sync', '--issue', 'S2T-1', '--requirement-id', 'req-1', '--preview'], env());
     assert.equal(res.status, 0, JSON.stringify(res.stdout));

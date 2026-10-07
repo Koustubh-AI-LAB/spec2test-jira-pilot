@@ -41,8 +41,7 @@ export async function migrate(): Promise<string[]> {
 }
 
 const invokedDirectly =
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+  process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
 if (invokedDirectly) {
   const applied = await migrate();

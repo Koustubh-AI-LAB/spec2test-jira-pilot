@@ -261,11 +261,13 @@ export async function postCriteria(
   // writeProperty, `existing` above never advanced, so this run would
   // otherwise post a second, identical comment. Check Jira itself first.
   const already = await findPostedComment(client, input.issueKey, fingerprint);
-  const comment = already ?? (await client.request<{ id: string; created?: string }>(
-    'POST',
-    `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`,
-    { body: criteriaComment(input, client.browseUrl(input.issueKey), fingerprint) },
-  ));
+  const comment =
+    already ??
+    (await client.request<{ id: string; created?: string }>(
+      'POST',
+      `/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`,
+      { body: criteriaComment(input, client.browseUrl(input.issueKey), fingerprint) },
+    ));
 
   // The approval-window check compares this against changelog timestamps,
   // which are Jira's clock - so this has to be Jira's clock too, not ours.
@@ -532,7 +534,11 @@ function verificationComment(input: PostVerificationInput, browseUrl: string, fi
   const footer = {
     type: 'paragraph',
     content: [
-      { type: 'text', text: `requirement ${input.requirementHash.slice(0, 12)} - ${browseUrl}`, marks: [{ type: 'em' }] },
+      {
+        type: 'text',
+        text: `requirement ${input.requirementHash.slice(0, 12)} - ${browseUrl}`,
+        marks: [{ type: 'em' }],
+      },
     ],
   };
 
@@ -625,7 +631,13 @@ export async function postVerification(
     event: 'jira_verification_posted',
     subject: `issue:${input.issueKey}`,
     actor: 'system',
-    detail: { issue_key: input.issueKey, state: input.state, certified: certifiedCount, total: input.criteria.length, fingerprint },
+    detail: {
+      issue_key: input.issueKey,
+      state: input.state,
+      certified: certifiedCount,
+      total: input.criteria.length,
+      fingerprint,
+    },
   });
 
   return {
@@ -637,10 +649,7 @@ export async function postVerification(
   };
 }
 
-export async function readProperty(
-  client: JiraClient,
-  issueKey: string,
-): Promise<PipelineProperty | undefined> {
+export async function readProperty(client: JiraClient, issueKey: string): Promise<PipelineProperty | undefined> {
   try {
     const res = await client.get<{ value: PipelineProperty }>(
       `/rest/api/3/issue/${encodeURIComponent(issueKey)}/properties/${PROPERTY_KEY}`,
@@ -654,14 +663,6 @@ export async function readProperty(
   }
 }
 
-export async function writeProperty(
-  client: JiraClient,
-  issueKey: string,
-  value: PipelineProperty,
-): Promise<void> {
-  await client.request(
-    'PUT',
-    `/rest/api/3/issue/${encodeURIComponent(issueKey)}/properties/${PROPERTY_KEY}`,
-    value,
-  );
+export async function writeProperty(client: JiraClient, issueKey: string, value: PipelineProperty): Promise<void> {
+  await client.request('PUT', `/rest/api/3/issue/${encodeURIComponent(issueKey)}/properties/${PROPERTY_KEY}`, value);
 }

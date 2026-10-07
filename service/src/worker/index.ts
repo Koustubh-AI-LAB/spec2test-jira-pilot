@@ -10,12 +10,7 @@ import { certifyTestCase } from '../certify.ts';
 import type { CertifyResult } from '../certify.ts';
 import { computeVerification } from '../verification.ts';
 import type { VerificationResult } from '../verification.ts';
-import type {
-  FalsificationReport,
-  GenerateResult,
-  SpecValidationResult,
-  ValidationReport,
-} from '../runner/types.ts';
+import type { FalsificationReport, GenerateResult, SpecValidationResult, ValidationReport } from '../runner/types.ts';
 
 /**
  * Processes exactly one job: generate -> validate -> falsify, all via the
@@ -150,7 +145,14 @@ export async function runOnce(jobId: string): Promise<RunOnceResult> {
       await persistValidationOnly({ job, ctx, generateResult, validation, filePath });
       await failJob(job.id, message);
       const verification = await computeVerification(ctx.requirementId);
-      return { jobId: job.id, status: 'failed', lastError: message, generate: generateResult, validation, verification };
+      return {
+        jobId: job.id,
+        status: 'failed',
+        lastError: message,
+        generate: generateResult,
+        validation,
+        verification,
+      };
     }
 
     const falsifyRes = runRunnerCli<FalsificationReport>([
@@ -165,7 +167,14 @@ export async function runOnce(jobId: string): Promise<RunOnceResult> {
       await persistIncompleteFalsification({ job, ctx, generateResult, validation, filePath });
       await failJob(job.id, message);
       const verification = await computeVerification(ctx.requirementId);
-      return { jobId: job.id, status: 'failed', lastError: message, generate: generateResult, validation, verification };
+      return {
+        jobId: job.id,
+        status: 'failed',
+        lastError: message,
+        generate: generateResult,
+        validation,
+        verification,
+      };
     }
     const falsification = falsifyRes.result!;
     const certify = certifyTestCase(falsification);
@@ -173,7 +182,15 @@ export async function runOnce(jobId: string): Promise<RunOnceResult> {
     await persistComplete({ job, ctx, generateResult, validation, falsification, filePath });
     const verification = await computeVerification(ctx.requirementId);
 
-    return { jobId: job.id, status: 'done', generate: generateResult, validation, falsification, certify, verification };
+    return {
+      jobId: job.id,
+      status: 'done',
+      generate: generateResult,
+      validation,
+      falsification,
+      certify,
+      verification,
+    };
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

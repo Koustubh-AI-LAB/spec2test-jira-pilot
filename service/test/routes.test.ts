@@ -194,8 +194,10 @@ describe('POST /specs/validate - draft-attempt cap (Step 6)', () => {
         ...PROVENANCE,
       })
     ).body.requirement;
-    return (await send('POST', `/requirements/${req.id}/criteria`, { criteria: [{ body: 'x' }] })).body
-      .criteria[0] as { id: string; content_hash: string };
+    return (await send('POST', `/requirements/${req.id}/criteria`, { criteria: [{ body: 'x' }] })).body.criteria[0] as {
+      id: string;
+      content_hash: string;
+    };
   }
 
   function ungroundedSpec(criterionId: string) {
@@ -218,7 +220,10 @@ describe('POST /specs/validate - draft-attempt cap (Step 6)', () => {
     const first = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
     assert.equal(first.status, 200);
     assert.equal(first.body.ok, false);
-    const second = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    const second = await send('POST', '/specs/validate', {
+      environment_id: env.id,
+      spec: ungroundedSpec(criterion.id),
+    });
     assert.equal(second.status, 200);
     assert.equal(second.body.ok, false);
 
@@ -247,7 +252,10 @@ describe('POST /specs/validate - draft-attempt cap (Step 6)', () => {
 
     // A successful validation must not itself count as a failed attempt.
     await send('POST', '/specs/validate', { environment_id: env.id, spec: grounded });
-    const stillOpen = await send('POST', '/specs/validate', { environment_id: env.id, spec: ungroundedSpec(criterion.id) });
+    const stillOpen = await send('POST', '/specs/validate', {
+      environment_id: env.id,
+      spec: ungroundedSpec(criterion.id),
+    });
     assert.equal(stillOpen.status, 200, 'a prior success must not count toward the cap');
   });
 
@@ -276,7 +284,13 @@ describe('POST /specs/validate - draft-attempt cap (Step 6)', () => {
     };
     const validated = await send('POST', '/specs/validate', { environment_id: env.id, spec: grounded });
     assert.equal(validated.body.ok, true);
-    await send('POST', '/test-cases', { criterion_id: criterion.id, name: 'ok case', kind: 'api', spec: grounded, ...PROVENANCE });
+    await send('POST', '/test-cases', {
+      criterion_id: criterion.id,
+      name: 'ok case',
+      kind: 'api',
+      spec: grounded,
+      ...PROVENANCE,
+    });
 
     // The counter must read 0 again - two more failures are allowed before
     // the cap trips, not just one.
@@ -420,9 +434,8 @@ describe('GET /pipeline/:issueKey', () => {
       [p.id, ISSUE, hash],
     );
     const requirementId = reqRows[0].id;
-    const criterion = (
-      await send('POST', `/requirements/${requirementId}/criteria`, { criteria: [{ body: 'rule' }] })
-    ).body.criteria[0];
+    const criterion = (await send('POST', `/requirements/${requirementId}/criteria`, { criteria: [{ body: 'rule' }] }))
+      .body.criteria[0];
     // /test-cases requires gate 1 closed on the criterion first.
     await send('POST', '/gate1/decisions', {
       subject_id: criterion.id,
@@ -493,7 +506,11 @@ describe('GET /pipeline/:issueKey', () => {
     assert.notEqual(resA.body.requirement, null, 'project A drafted this requirement and must see it');
 
     const resB = await send('GET', `/pipeline/${ISSUE}?project_id=${pB.id}`);
-    assert.equal(resB.body.requirement, null, 'project B must not resume project A\'s requirement for the same issue key');
+    assert.equal(
+      resB.body.requirement,
+      null,
+      "project B must not resume project A's requirement for the same issue key",
+    );
   });
 });
 
@@ -557,12 +574,18 @@ describe('dry_run through the routes', () => {
     await reconcile(jira.client, ISSUE);
 
     await getAdminPool().query(`UPDATE requirement SET state = 'contract_verified' WHERE id = $1`, [requirementId]);
-    const before_ = (await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId])).rows[0].state;
+    const before_ = (await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId])).rows[0]
+      .state;
     assert.equal(before_, 'contract_verified', 'premise: the stored state is deliberately wrong');
 
     await send('POST', `/jira/${ISSUE}/verification`, { requirement_id: requirementId, dry_run: true });
 
-    const after_ = (await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId])).rows[0].state;
-    assert.equal(after_, 'awaiting_test_approval', 'dry_run must still persist the recomputed requirement.state to Postgres');
+    const after_ = (await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId])).rows[0]
+      .state;
+    assert.equal(
+      after_,
+      'awaiting_test_approval',
+      'dry_run must still persist the recomputed requirement.state to Postgres',
+    );
   });
 });

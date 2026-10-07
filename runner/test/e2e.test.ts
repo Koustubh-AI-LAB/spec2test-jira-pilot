@@ -40,7 +40,9 @@ async function registerEnvironment(targetRepoPath: string, baseUrl: string, open
     body: JSON.stringify({ key: 'S2T', jira_project_key: 'S2T', target_repo_path: targetRepoPath }),
   });
   if (!projectRes.ok) {
-    throw new Error(`State Service unreachable or refused /projects (${projectRes.status}) - is "npm start" running in service/?`);
+    throw new Error(
+      `State Service unreachable or refused /projects (${projectRes.status}) - is "npm start" running in service/?`,
+    );
   }
   const project = (await projectRes.json()) as { id: string };
 
@@ -71,7 +73,9 @@ describe('runner e2e (live)', { skip: !live && 'CONDUIT_BASE_URL not set' }, () 
       throw new Error('CONDUIT_BASE_URL is set but CONDUIT_REPO_PATH is not - both are required for the live e2e run');
     }
     if (!existsSync(spec2testDir)) {
-      throw new Error(`${spec2testDir} does not exist - run "npm run init --workspace=runner -- ${targetRepoRoot}" first`);
+      throw new Error(
+        `${spec2testDir} does not exist - run "npm run init --workspace=runner -- ${targetRepoRoot}" first`,
+      );
     }
     // Preflight: the environment-allowlist machinery, exercised over real
     // HTTP against a really-running State Service - the same path the

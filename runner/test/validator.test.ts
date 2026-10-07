@@ -89,12 +89,7 @@ describe('import whitelist', () => {
   });
 
   it('rejects reading process.env with no import at all', () => {
-    const source = [
-      "test('x', async () => {",
-      '  const token = process.env.TARGET_AUTH_TOKEN;',
-      '});',
-      '',
-    ].join('\n');
+    const source = ["test('x', async () => {", '  const token = process.env.TARGET_AUTH_TOKEN;', '});', ''].join('\n');
     const violations = checkImportWhitelist(source, 'x.spec.ts');
     assert.equal(violations.length, 1);
     assert.equal(violations[0]!.specifier, 'process');
@@ -110,7 +105,7 @@ describe('import whitelist', () => {
   it('rejects eval() and new Function(), the string-based bypass of the whole AST check', () => {
     const source = [
       "test('x', async () => {",
-      "  eval('require(\"fs\")');",
+      '  eval(\'require("fs")\');',
       "  new Function('return process')();",
       '});',
       '',
@@ -231,9 +226,7 @@ describe('AST checks', () => {
       '',
     ].join('\n');
     const failures = checkAst(source, 'x.spec.ts', wellFormedSpec);
-    assert.ok(
-      failures.some((f) => f.rule === 'assertion_present' && /status_201.*no expect/.test(f.message)),
-    );
+    assert.ok(failures.some((f) => f.rule === 'assertion_present' && /status_201.*no expect/.test(f.message)));
   });
 
   it('accepts a well-formed generated file', () => {

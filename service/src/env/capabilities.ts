@@ -1,9 +1,4 @@
-export const ENVIRONMENT_CLASSES = [
-  'ephemeral',
-  'dedicated',
-  'shared-staging',
-  'production',
-] as const;
+export const ENVIRONMENT_CLASSES = ['ephemeral', 'dedicated', 'shared-staging', 'production'] as const;
 
 export type EnvironmentClass = (typeof ENVIRONMENT_CLASSES)[number];
 

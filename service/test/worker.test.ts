@@ -83,7 +83,9 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     app = buildServer();
     await app.ready();
 
-    const project = (await post('/projects', { key: 'P-WORKER', jira_project_key: 'PILOT', target_repo_path: targetRepoRoot })).body;
+    const project = (
+      await post('/projects', { key: 'P-WORKER', jira_project_key: 'PILOT', target_repo_path: targetRepoRoot })
+    ).body;
     const env = await post('/environments', {
       project_id: project.id,
       base_url: process.env.CONDUIT_BASE_URL,
@@ -99,7 +101,9 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
   });
 
   async function seedApprovedTestCase(issueKey: string, spec: unknown) {
-    const project = (await post('/projects', { key: `P-${issueKey}`, jira_project_key: 'PILOT', target_repo_path: targetRepoRoot })).body;
+    const project = (
+      await post('/projects', { key: `P-${issueKey}`, jira_project_key: 'PILOT', target_repo_path: targetRepoRoot })
+    ).body;
     const req = (
       await post('/requirements', {
         project_id: project.id,
@@ -120,7 +124,13 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
       seen_hash: criterion.content_hash,
     });
     const testCase = (
-      await post('/test-cases', { criterion_id: criterion.id, name: `worker test ${issueKey}`, kind: 'api', spec, ...PROVENANCE })
+      await post('/test-cases', {
+        criterion_id: criterion.id,
+        name: `worker test ${issueKey}`,
+        kind: 'api',
+        spec,
+        ...PROVENANCE,
+      })
     ).body;
     await post('/gate2/decisions', {
       subject_id: testCase.id,
@@ -164,14 +174,10 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     assert.equal(res.body.certify.verdict, 'certified', JSON.stringify(res.body.certify));
     assert.ok(res.body.falsification.verdicts.length > 0);
 
-    const runs = await getPool().query(
-      "SELECT kind, state FROM run WHERE requirement_id = $1 ORDER BY kind",
-      [requirement.id],
-    );
-    assert.deepEqual(
-      runs.rows.map((r) => r.kind).sort(),
-      ['falsification', 'smoke'],
-    );
+    const runs = await getPool().query('SELECT kind, state FROM run WHERE requirement_id = $1 ORDER BY kind', [
+      requirement.id,
+    ]);
+    assert.deepEqual(runs.rows.map((r) => r.kind).sort(), ['falsification', 'smoke']);
     assert.ok(runs.rows.every((r) => r.state === 'complete'));
 
     const faultCount = await getPool().query(
@@ -186,7 +192,10 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
     );
     assert.ok(runResultCount.rows[0].n > 0);
 
-    const updatedTestCase = await getPool().query('SELECT artifact_path, artifact_hash, state FROM test_case WHERE id = $1', [testCase.id]);
+    const updatedTestCase = await getPool().query(
+      'SELECT artifact_path, artifact_hash, state FROM test_case WHERE id = $1',
+      [testCase.id],
+    );
     assert.notEqual(updatedTestCase.rows[0].artifact_path, '');
     assert.notEqual(updatedTestCase.rows[0].artifact_hash, '');
     // Gate 2 approval is a historical fact and does not change because of
@@ -230,7 +239,9 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
   });
 
   it('refuses to verify a test case that has not passed gate 2', async () => {
-    const project = (await post('/projects', { key: 'P-NOGATE2', jira_project_key: 'PILOT', target_repo_path: targetRepoRoot })).body;
+    const project = (
+      await post('/projects', { key: 'P-NOGATE2', jira_project_key: 'PILOT', target_repo_path: targetRepoRoot })
+    ).body;
     const req = (
       await post('/requirements', {
         project_id: project.id,
@@ -253,7 +264,14 @@ describe('worker: verify end to end (live)', { skip: !live && 'CONDUIT_BASE_URL 
         criterion_id: criterion.id,
         name: 'never approved',
         kind: 'api',
-        spec: { criterionId: 'x', name: 'x', method: 'GET', path: '/api/articles', auth: 'none', assertions: [{ name: 'a', check: 'status === 200' }] },
+        spec: {
+          criterionId: 'x',
+          name: 'x',
+          method: 'GET',
+          path: '/api/articles',
+          auth: 'none',
+          assertions: [{ name: 'a', check: 'status === 200' }],
+        },
         ...PROVENANCE,
       })
     ).body;

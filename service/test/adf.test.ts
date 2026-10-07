@@ -54,10 +54,7 @@ describe('adf flattening is stable', () => {
       content: [
         {
           type: 'listItem',
-          content: [
-            para('outer'),
-            { type: 'bulletList', content: [{ type: 'listItem', content: [para('inner')] }] },
-          ],
+          content: [para('outer'), { type: 'bulletList', content: [{ type: 'listItem', content: [para('inner')] }] }],
         },
       ],
     });

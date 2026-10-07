@@ -15,8 +15,10 @@ export interface AuditEntry {
  */
 export async function audit(entry: AuditEntry, client?: PoolClient): Promise<void> {
   const runner = client ?? getPool();
-  await runner.query(
-    'INSERT INTO audit_event (event, subject, actor, detail) VALUES ($1, $2, $3, $4)',
-    [entry.event, entry.subject ?? '', entry.actor ?? '', JSON.stringify(entry.detail ?? {})],
-  );
+  await runner.query('INSERT INTO audit_event (event, subject, actor, detail) VALUES ($1, $2, $3, $4)', [
+    entry.event,
+    entry.subject ?? '',
+    entry.actor ?? '',
+    JSON.stringify(entry.detail ?? {}),
+  ]);
 }

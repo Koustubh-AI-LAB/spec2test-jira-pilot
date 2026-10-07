@@ -5,7 +5,14 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: ['**/node_modules/', '**/dist/', 'runner/fixtures/', 'runner/.tmp-test/', 'plugin/.scratch/', 'artifacts/'],
+    ignores: [
+      '**/node_modules/',
+      '**/dist/',
+      'runner/fixtures/',
+      'runner/.tmp-test/',
+      'plugin/.scratch/',
+      'artifacts/',
+    ],
   },
   js.configs.recommended,
   tseslint.configs.recommended,

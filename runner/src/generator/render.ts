@@ -130,9 +130,7 @@ export function render(spec: TestCaseSpec): string {
     // Outside any test.step on purpose: a broken setup is a broken control,
     // and must score INCONCLUSIVE rather than being attributed to an
     // assertion that never got the chance to run.
-    lines.push(
-      `    expect(status, ${JSON.stringify(`setup step "${step.name}" failed`)}).toBeLessThan(400);`,
-    );
+    lines.push(`    expect(status, ${JSON.stringify(`setup step "${step.name}" failed`)}).toBeLessThan(400);`);
     for (const [name, segments] of Object.entries(step.capture ?? {})) {
       lines.push(`    captures[${JSON.stringify(name)}] = ${captureAccessor(segments)};`);
       lines.push(

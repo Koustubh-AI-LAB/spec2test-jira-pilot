@@ -90,9 +90,7 @@ async function criteriaRows() {
 }
 
 async function requirementState(): Promise<string> {
-  const { rows } = await getPool().query('SELECT state FROM requirement WHERE id = $1', [
-    requirementId,
-  ]);
+  const { rows } = await getPool().query('SELECT state FROM requirement WHERE id = $1', [requirementId]);
   return rows[0].state;
 }
 
@@ -242,11 +240,7 @@ describe('the post-drift lifecycle', () => {
     const second = await presentCriteria(jira, hash);
     assert.equal(second.wrote, true);
     assert.match(second.reason, /recovered/, 'did not recognise the already-posted comment');
-    assert.equal(
-      jira.state.comments?.length,
-      1,
-      'posted a duplicate comment instead of recovering the existing one',
-    );
+    assert.equal(jira.state.comments?.length, 1, 'posted a duplicate comment instead of recovering the existing one');
 
     // The property is back, so the approval-window check has something to
     // measure against again.
@@ -307,7 +301,7 @@ describe('gate 1 rejection', () => {
     assert.equal(result.gate1?.reason, undefined, 'used a comment that predates the rejection');
   });
 
-  it('never quotes its own comment back as the PO\'s reason', async () => {
+  it("never quotes its own comment back as the PO's reason", async () => {
     // The exact failure this guards against: in a pilot where the service
     // authenticates as the same Jira account as the human tester, a comment
     // the SERVICE posted (e.g. a refusal notice from an earlier attempt) is

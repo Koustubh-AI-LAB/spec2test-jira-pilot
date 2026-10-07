@@ -81,7 +81,12 @@ export function scopedEnv(extra: Record<string, string>): Record<string, string>
  * installed, never something npx fetches fresh.
  */
 function spawnPlaywright(cwd: string, args: string[], extraEnv: Record<string, string>) {
-  const playwrightBin = join(cwd, 'node_modules', '.bin', process.platform === 'win32' ? 'playwright.cmd' : 'playwright');
+  const playwrightBin = join(
+    cwd,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'playwright.cmd' : 'playwright',
+  );
   const env = scopedEnv(extraEnv);
 
   // .cmd files can only be launched through a shell on Windows, and Node

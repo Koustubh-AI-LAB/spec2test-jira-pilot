@@ -114,7 +114,7 @@ function isDeclarationPosition(node: ts.Identifier, parent: ts.Node): boolean {
   }
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) return true;
   if (ts.isLabeledStatement(parent) && parent.label === node) return true;
-  if ((ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) ) return true;
+  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) return true;
   return false;
 }
 

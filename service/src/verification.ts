@@ -32,11 +32,7 @@ interface TestCaseRow {
 }
 
 export type RequirementVerificationState =
-  | 'awaiting_test_approval'
-  | 'verifying'
-  | 'contract_verified'
-  | 'weak'
-  | 'failing';
+  'awaiting_test_approval' | 'verifying' | 'contract_verified' | 'weak' | 'failing';
 
 export interface VerificationResult {
   state: RequirementVerificationState | 'unchanged';
@@ -72,10 +68,10 @@ export async function latestFalsificationReport(testCaseId: string): Promise<Fal
     spec: FaultVerdict['fault'];
     verdict: string;
     detail: string;
-  }>(
-    `SELECT spec, verdict, detail FROM fault_experiment WHERE run_id = $1 AND test_case_id = $2`,
-    [latest.id, testCaseId],
-  );
+  }>(`SELECT spec, verdict, detail FROM fault_experiment WHERE run_id = $1 AND test_case_id = $2`, [
+    latest.id,
+    testCaseId,
+  ]);
 
   return {
     criterionId: latest.criterion_id,
@@ -202,10 +198,9 @@ export function decideVerificationState(input: {
 
 export async function computeVerification(requirementId: string): Promise<VerificationResult> {
   const pool = getPool();
-  const { rows: reqRows } = await pool.query<{ state: string }>(
-    'SELECT state FROM requirement WHERE id = $1',
-    [requirementId],
-  );
+  const { rows: reqRows } = await pool.query<{ state: string }>('SELECT state FROM requirement WHERE id = $1', [
+    requirementId,
+  ]);
   const requirement = reqRows[0];
   if (!requirement) return { state: 'unchanged', criteria: [] };
 
@@ -214,18 +209,20 @@ export async function computeVerification(requirementId: string): Promise<Verifi
     [requirementId],
   );
   const nonRejected = criteria.filter((c) => c.state !== 'rejected');
-  const gate1Closed = nonRejected.length > 0 && nonRejected.every((c) => c.state === 'approved' || c.state === 'uncovered');
+  const gate1Closed =
+    nonRejected.length > 0 && nonRejected.every((c) => c.state === 'approved' || c.state === 'uncovered');
   const runningJob = gate1Closed && (await hasRunningJob(requirementId));
 
-  const coverage: CriterionCoverage[] = gate1Closed && !runningJob
-    ? await Promise.all(
-        nonRejected.map(async (c) => {
-          const detail: CoverageDetail =
-            c.state === 'uncovered' ? { covered: false, quarantinedOnly: false } : await coverageForCriterion(c.id);
-          return { id: c.id, stateAffecting: c.state_affecting, ...detail };
-        }),
-      )
-    : [];
+  const coverage: CriterionCoverage[] =
+    gate1Closed && !runningJob
+      ? await Promise.all(
+          nonRejected.map(async (c) => {
+            const detail: CoverageDetail =
+              c.state === 'uncovered' ? { covered: false, quarantinedOnly: false } : await coverageForCriterion(c.id);
+            return { id: c.id, stateAffecting: c.state_affecting, ...detail };
+          }),
+        )
+      : [];
 
   const anyVerificationAttempted = gate1Closed && !runningJob ? await hasAnyFalsificationRun(requirementId) : false;
   const wasEverCertified = requirement.state === 'contract_verified' || requirement.state === 'failing';
@@ -252,8 +249,5 @@ async function hasAnyFalsificationRun(requirementId: string): Promise<boolean> {
 }
 
 async function setState(requirementId: string, state: RequirementVerificationState): Promise<void> {
-  await getPool().query(`UPDATE requirement SET state = $1, updated_at = now() WHERE id = $2`, [
-    state,
-    requirementId,
-  ]);
+  await getPool().query(`UPDATE requirement SET state = $1, updated_at = now() WHERE id = $2`, [state, requirementId]);
 }

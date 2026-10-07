@@ -7,7 +7,5 @@
     "name": "koustubh",
     "email": "arolekoustubh4@gmail.com"
   },
-  "skills": [
-    "./skills/pipeline"
-  ]
+  "skills": ["./skills/pipeline"]
 }

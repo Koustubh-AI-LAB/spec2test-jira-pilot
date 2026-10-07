@@ -49,7 +49,11 @@ export function unparseableAssertionHints(spec: TestCaseSpec): string[] {
     );
 }
 
-function pickAlternateStatus(schema: OpenApiDoc, spec: TestCaseSpec, original: number): { value: number; plausible: boolean } {
+function pickAlternateStatus(
+  schema: OpenApiDoc,
+  spec: TestCaseSpec,
+  original: number,
+): { value: number; plausible: boolean } {
   const documented = documentedStatuses(schema, spec.method, spec.path)
     .filter((s) => s !== original)
     .sort((a, b) => a - b);

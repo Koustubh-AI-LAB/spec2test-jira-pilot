@@ -47,7 +47,10 @@ describe('computeStage', () => {
   });
 
   it('a requirement with no criteria', () => {
-    assert.equal(stageOf({ requirement: { state: 'awaiting_requirement_approval' }, criteria: [], testCases: [] }), 'needs_criteria');
+    assert.equal(
+      stageOf({ requirement: { state: 'awaiting_requirement_approval' }, criteria: [], testCases: [] }),
+      'needs_criteria',
+    );
   });
 
   it('drift wins over everything, whether Jira or the rows report it', () => {
@@ -105,7 +108,10 @@ describe('computeStage', () => {
     it('needs_tests reports if ANY criterion lacks one, not just the first', () => {
       assert.equal(
         stageOf({
-          criteria: [{ id: 'c1', state: 'approved' }, { id: 'c2', state: 'approved' }],
+          criteria: [
+            { id: 'c1', state: 'approved' },
+            { id: 'c2', state: 'approved' },
+          ],
           testCases: [{ criterionId: 'c1', state: 'approved' }],
         }),
         'needs_tests',
@@ -164,7 +170,10 @@ describe('criteriaArePosted', () => {
   });
 
   it('is false when a criterion was reworded since it was posted', () => {
-    assert.equal(criteriaArePosted(property, requirement, [criteria[0]!, { id: 'c2', content_hash: 'changed' }]), false);
+    assert.equal(
+      criteriaArePosted(property, requirement, [criteria[0]!, { id: 'c2', content_hash: 'changed' }]),
+      false,
+    );
   });
 
   it('is false when a criterion was never posted', () => {
