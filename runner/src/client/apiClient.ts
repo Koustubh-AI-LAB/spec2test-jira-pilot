@@ -26,6 +26,7 @@ export interface ApiResponse {
    *  is the response shape isn't statically known, and forcing a cast at
    *  every assertion would just be noise generated tests (and specs) would
    *  have to carry for no real safety gain. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above
   body: any;
 }
 

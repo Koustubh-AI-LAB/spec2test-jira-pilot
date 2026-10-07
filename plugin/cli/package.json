@@ -2,6 +2,7 @@
   "name": "@spec2test/plugin-cli",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "s2t": "./bin/s2t.mjs"
@@ -9,7 +10,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
-    "prompts:lock": "node --experimental-strip-types src/prompts.ts --lock"
+    "prompts:lock": "node --experimental-strip-types src/prompts.ts --lock",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
     "node": ">=22.9"
